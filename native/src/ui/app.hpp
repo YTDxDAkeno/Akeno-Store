@@ -13,6 +13,8 @@
 #include <deque>
 #include <functional>
 #include <memory>
+#include <mutex>
+#include <thread>
 #include <string>
 #include <vector>
 
@@ -41,6 +43,7 @@ struct Settings
     int root = 0;
     bool adult = false;
     bool reduce_motion = false;
+    bool auto_update = false;
     std::vector<std::string> disabled_providers;
     std::vector<std::string> github_repositories;
     bool load(const std::string &path);
@@ -226,6 +229,15 @@ class App
     void local_menu(const LocalGame &game);
     std::deque<Toast> toasts_;
     float focus_pop_ = 0; // grows to 1 after focus changes
+
+    // Background resolution of the open detail page (verified app record).
+    std::thread resolve_thread_;
+    std::mutex resolve_mutex_;
+    std::vector<Game> resolved_;
+    std::string resolving_;
+    void merge_resolved();
+    bool auto_update_done_ = false;
+    int update_all();
 };
 
 } // namespace akeno::ui

@@ -139,6 +139,7 @@ bool Settings::load(const std::string &path)
     this->root = static_cast<int>(root["root"].integer(0));
     adult = root["adult"].boolean(false);
     reduce_motion = root["reduce_motion"].boolean(false);
+    auto_update = root["auto_update"].boolean(false);
     disabled_providers.clear();
     root["disabled_providers"].each([&](json::Value v) { disabled_providers.push_back(v.str()); });
     github_repositories.clear();
@@ -149,7 +150,8 @@ bool Settings::load(const std::string &path)
 bool Settings::save(const std::string &path) const
 {
     std::string text = "{\"schema\":1,\"root\":" + std::to_string(root) + ",\"adult\":" + (adult ? "true" : "false") +
-                       ",\"reduce_motion\":" + (reduce_motion ? "true" : "false") + ",\"disabled_providers\":[";
+                       ",\"reduce_motion\":" + (reduce_motion ? "true" : "false") +
+                       ",\"auto_update\":" + (auto_update ? "true" : "false") + ",\"disabled_providers\":[";
     for (std::size_t i = 0; i < disabled_providers.size(); ++i)
         text += (i ? "," : "") + json::quote(disabled_providers[i]);
     text += "],\"github_repositories\":[";
@@ -213,7 +215,47 @@ App::App(Gfx &gfx, std::string asset_dir) : gfx_(gfx), asset_dir_(std::move(asse
     sync_data();
 }
 
-App::~App() = default;
+App::~App()
+{
+    if (resolve_thread_.joinable())
+        resolve_thread_.join();
+}
+
+void App::merge_resolved()
+{
+    std::vector<Game> done;
+    {
+        std::lock_guard lock(resolve_mutex_);
+        done.swap(resolved_);
+    }
+    for (const Game &r : done)
+        for (Game &g : games_)
+            if (g.id == r.id)
+            {
+                g.license = r.license.empty() ? g.license : r.license;
+                g.release_notes = r.release_notes;
+                g.artifact_url = r.artifact_url;
+                g.sha256 = r.sha256;
+                g.source_repo = r.source_repo;
+                g.version = r.version.empty() ? g.version : r.version;
+                g.resolved = r.resolved;
+            }
+}
+
+int App::update_all()
+{
+    int queued = 0;
+    for (const InstalledTitle &title : installed_)
+    {
+        const int index = game_index_by_title(title.title_id);
+        if (index >= 0 && title.managed && update_available(games_[static_cast<std::size_t>(index)], title))
+        {
+            installer_->install(games_[static_cast<std::size_t>(index)], title.root);
+            ++queued;
+        }
+    }
+    return queued;
+}
 
 bool App::catalog_ready() const { return !catalog_->refreshing() && !games_.empty(); }
 
@@ -222,6 +264,14 @@ bool App::catalog_ready() const { return !catalog_->refreshing() && !games_.empt
 
 void App::sync_data()
 {
+    merge_resolved();
+    if (settings_.auto_update && !auto_update_done_ && !catalog_->refreshing() && !games_.empty() &&
+        library_generation_ != ~0ull)
+    {
+        auto_update_done_ = true;
+        if (const int queued = update_all())
+            toast("Automatische Updates", std::to_string(queued) + " Titel werden aktualisiert");
+    }
     if (catalog_->generation() != catalog_generation_)
     {
         catalog_generation_ = catalog_->generation();
@@ -537,6 +587,23 @@ void App::open_detail(int index)
     detail_anim_ = 0;
     detail_button_ = 0;
     detail_scroll_ = 0;
+    const Game &game = games_[static_cast<std::size_t>(index)];
+    // Signed-catalog entries: fetch the verified app record (license, notes, SHA-256) now.
+    // Other stores resolve at install time (GitHub's API is rate limited).
+    if (game.provider == "prosperostore" && game.access == Access::Install && !game.resolved && resolving_ != game.id)
+    {
+        if (resolve_thread_.joinable())
+            resolve_thread_.join();
+        resolving_ = game.id;
+        resolve_thread_ = std::thread([this, copy = game]() mutable {
+            std::string error;
+            if (catalog_->resolve(copy, error))
+            {
+                std::lock_guard lock(resolve_mutex_);
+                resolved_.push_back(std::move(copy));
+            }
+        });
+    }
 }
 
 void App::open_qr(const std::string &title, const std::string &url)
@@ -967,7 +1034,7 @@ void App::press_downloads(Button button)
 void App::press_settings(Button button)
 {
     const int provider_rows = static_cast<int>(providers_.size());
-    const int count = 4 + provider_rows;
+    const int count = 6 + provider_rows;
     if (button == Button::Up)
     {
         if (settings_focus_ == 0)
@@ -1003,9 +1070,17 @@ void App::press_settings(Button button)
     }
     else if (settings_focus_ == 3)
         settings_.reduce_motion = !settings_.reduce_motion;
+    else if (settings_focus_ == 4)
+        settings_.auto_update = !settings_.auto_update;
+    else if (settings_focus_ == 5)
+    {
+        const int queued = update_all();
+        toast("Updates", queued ? std::to_string(queued) + " Titel zur Warteschlange hinzugefügt"
+                                : "Alle von Akeno installierten Titel sind aktuell");
+    }
     else
     {
-        ProviderStatus &p = providers_[static_cast<std::size_t>(settings_focus_ - 4)];
+        ProviderStatus &p = providers_[static_cast<std::size_t>(settings_focus_ - 6)];
         p.enabled = !p.enabled;
         catalog_->set_enabled(p.id, p.enabled);
         auto &disabled = settings_.disabled_providers;
@@ -1847,6 +1922,14 @@ void App::draw_settings()
     entry("Inhalte für Erwachsene", settings_.adult ? "Sichtbar" : "Ausgeblendet",
           "Filtert itch.io- und Game-Jolt-Einträge mit Erwachsenen-Kennzeichnung", theme::dim);
     entry("Reduzierte Bewegung", settings_.reduce_motion ? "An" : "Aus", "Hintergrundanimation abschalten", theme::dim);
+    entry("Automatische Updates", settings_.auto_update ? "An" : "Aus",
+          "Aktualisiert von Akeno installierte Titel beim Start, sobald der Katalog geladen ist", theme::dim);
+    int updates = 0;
+    for (const InstalledTitle &t : installed_)
+        if (const int i = game_index_by_title(t.title_id); i >= 0 && t.managed && update_available(games_[static_cast<std::size_t>(i)], t))
+            ++updates;
+    entry("Alle aktualisieren", updates ? std::to_string(updates) + " verfügbar" : "Alles aktuell",
+          "Neuere Katalogversionen aller von Akeno installierten Titel", updates ? theme::warn : theme::ok);
     for (const ProviderStatus &p : providers_)
     {
         std::string value = !p.enabled ? "Aus"

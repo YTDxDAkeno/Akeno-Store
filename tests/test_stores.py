@@ -176,41 +176,53 @@ class ManifestTest(unittest.TestCase):
 
 
 class ProsperoStoreTest(unittest.TestCase):
+    """Runs against a real signed catalog snapshot (sequence 1293, 2026-11-27)."""
+
+    FIXTURES = Path(__file__).resolve().parents[1] / "native/tests/fixtures/prosperostore"
+
     def setUp(self):
-        self.project = GitHubProject(
-            "example/jump", "Jump", "Arcade", "A test release", "MIT (code)", "ps5", "all",
-        )
-        self.record = {
-            "kind": "game", "titleid": "PPSA99999", "version": "01.000.001",
-            "source_repo": "https://github.com/example/jump",
-            "artifact_url": "https://github.com/example/jump/releases/download/v1/jump.zip",
-            "sha256": "1" * 64,
-            "icon_url": "https://raw.githubusercontent.com/example/jump/v1/sce_sys/icon0.png",
-        }
-        projects = patch("stores.prospero.PROJECTS", (("PPSA99999", self.project),))
-        projects.start()
-        self.addCleanup(projects.stop)
+        self.files = {name: (self.FIXTURES / name).read_bytes() for name in ("manifest.json", "manifest.sig", "index.json")}
 
-    def test_known_game_records_only_expose_discovery_metadata(self):
-        with patch("stores.prospero._fetch", return_value=json.dumps(self.record).encode()) as fetch:
-            game, = ProsperoStoreProvider().list_games()
+    def fetch(self, url, accept):
+        return self.files[url.rsplit("/", 1)[1]]
 
-        fetch.assert_called_once_with(
-            "https://raw.githubusercontent.com/darkxex/ps5-homebrew-catalog/main/apps/PPSA99999.json",
-            "application/json",
-        )
-        self.assertEqual(game["version"], "01.000.001")
-        self.assertEqual(game["provider"], "prosperostore")
-        self.assertEqual(game["target_platform"], "ps5")
-        self.assertNotIn("artifact_url", game)
-        self.assertNotIn("sha256", game)
-        self.assertEqual(game["cover_url"], self.record["icon_url"])
+    def test_whole_signed_catalog_is_listed(self):
+        with tempfile.TemporaryDirectory() as state, patch("stores.prospero._fetch", side_effect=self.fetch):
+            games = ProsperoStoreProvider(Path(state)).list_games()
+            self.assertEqual((Path(state) / "prosperostore.sequence").read_text(), "1293")
+        ids = {game["title_id"] for game in games}
+        self.assertGreater(len(games), 230)
+        self.assertTrue({"PPSA99874", "PPSA98001", "PRWB00001", "PPSA99170"} <= ids)
+        self.assertTrue(all(game["signed_catalog"] and game["provider"] == "prosperostore" for game in games))
+        self.assertTrue(all("artifact_url" not in game for game in games))
 
-    def test_record_repository_must_match_reviewed_source(self):
-        self.record["source_repo"] = "https://github.com/different/repository"
-        with patch("stores.prospero._fetch", return_value=json.dumps(self.record).encode()):
-            with self.assertRaisesRegex(CatalogError, "changed identity"):
+    def test_tampered_manifest_is_rejected(self):
+        manifest = bytearray(self.files["manifest.json"])
+        manifest[100] ^= 1
+        self.files["manifest.json"] = bytes(manifest)
+        with patch("stores.prospero._fetch", side_effect=self.fetch):
+            with self.assertRaisesRegex(CatalogError, "signature"):
                 ProsperoStoreProvider().list_games()
+
+    def test_rollback_and_index_mismatch_are_rejected(self):
+        with tempfile.TemporaryDirectory() as state:
+            (Path(state) / "prosperostore.sequence").write_text("5000")
+            with patch("stores.prospero._fetch", side_effect=self.fetch):
+                with self.assertRaisesRegex(CatalogError, "older"):
+                    ProsperoStoreProvider(Path(state)).list_games()
+        self.files["index.json"] += b" "
+        with patch("stores.prospero._fetch", side_effect=self.fetch):
+            with self.assertRaisesRegex(CatalogError, "index.json"):
+                ProsperoStoreProvider().list_games()
+
+    def test_rfc8032_vector(self):
+        from security.ed25519 import verify
+        key = bytes.fromhex("d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a")
+        signature = bytes.fromhex(
+            "e5564300c360ac729086e2cc806e828a84877f1eb8e5d974d873e065224901555fb8821590a33bacc61e39701cf9b46"
+            "bd25bf5f0595bbe24655141438e7a100b")
+        self.assertTrue(verify(key, b"", signature))
+        self.assertFalse(verify(key, b"x", signature))
 
 
 if __name__ == "__main__":

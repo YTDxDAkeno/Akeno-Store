@@ -27,7 +27,7 @@ def providers_for(args):
         providers.extend([
             ("GitHub", GitHubProvider(GITHUB_PC_PROJECTS)),
             ("PS5-Projekte", GitHubProvider(GITHUB_PS5_PROJECTS)),
-            ("ProsperoStore", ProsperoStoreProvider()),
+            ("ProsperoStore", ProsperoStoreProvider(args.data_dir.expanduser())),
             ("itch.io", ItchProvider()),
         ])
     providers.extend(

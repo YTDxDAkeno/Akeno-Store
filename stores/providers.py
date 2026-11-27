@@ -23,7 +23,7 @@ REPOSITORY = re.compile(r"[a-zA-Z0-9][a-zA-Z0-9-]{0,38}/[a-zA-Z0-9][a-zA-Z0-9_.-
 HOST_LABEL = re.compile(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\Z")
 SHA256 = re.compile(r"[0-9a-fA-F]{64}\Z")
 ATOM_NAMESPACE = {"atom": "http://www.w3.org/2005/Atom"}
-ITCH_FEED = "https://itch.io/games/price-free.xml"
+ITCH_FEED = "https://itch.io/games/free.xml"
 RESTRICTED = re.compile(r"(?:\b(?:nsfw|adult|mature|explicit|erotic|pornographic)\b|\b18\+)", re.IGNORECASE)
 REQUIRED_GAME_FIELDS = {
     "id", "title", "version", "runtime", "entrypoint", "archive_url", "sha256",
@@ -32,6 +32,11 @@ REQUIRED_GAME_FIELDS = {
 OPTIONAL_GAME_FIELDS = {
     "description", "source_url", "age_rating", "cover_url", "screenshots", "genre", "developer",
 }
+
+
+def _reserved_windows_name(segment: str) -> bool:
+    stem = segment.split(".")[0].rstrip(" ").upper()
+    return stem in {"CON", "PRN", "AUX", "NUL"} or (len(stem) == 4 and stem[:3] in {"COM", "LPT"} and stem[3] in "123456789")
 
 
 class CatalogError(ValueError):
@@ -302,7 +307,7 @@ def _manifest_game(entry: object) -> dict:
         or any(ord(character) < 32 for character in entrypoint)
         or any(
             segment in ("", ".", "..") or any(character in '<>:"|?*' for character in segment)
-            or PureWindowsPath(segment).is_reserved()
+            or _reserved_windows_name(segment)
             for segment in entrypoint.split("/")
         )
         or not entrypoint.lower().endswith((".htm", ".html"))

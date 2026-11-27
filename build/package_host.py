@@ -5,20 +5,22 @@ from zipfile import ZIP_DEFLATED, ZipFile, ZipInfo
 
 ROOT = Path(__file__).resolve().parents[1]
 DIRECTORIES = (
-    "apps", "assets", "build", "compatibility", "core", "diagnostics", "docs",
-    "graphics", "input", "licenses", "manifests", "networking", "platform",
-    "recompilation", "runtimes", "security", "shortcuts", "stores", "tests",
-    "third_party", "tools",
+    "apps", "assets", "build", "compatibility", "core", "docs", "licenses", "manifests",
+    "native", "ps5", "runtimes", "security", "stores", "tests", "tools",
 )
+# Generated or downloaded trees stay out of the source package.
+EXCLUDED = {"__pycache__", ".deps", "dist"}
 
 
 def main():
     files = set(ROOT.glob("*.md"))
     files.add(ROOT / "Makefile")
+    files.add(ROOT / "LICENSE")
     for name in DIRECTORIES:
         files.update(
             file for file in (ROOT / name).rglob("*")
-            if file.is_file() and "__pycache__" not in file.parts and not file.suffix == ".pyc"
+            if file.is_file() and not EXCLUDED.intersection(file.parts) and not file.suffix == ".pyc"
+            and not (name in {"native", "ps5"} and "build" in file.relative_to(ROOT / name).parts)
         )
 
     output = ROOT / "dist" / "akeno-gaming-hub-host.zip"
