@@ -78,7 +78,7 @@ bool decode_image(std::string_view encoded, int max_w, int max_h, Pixels &out)
     return true;
 }
 
-Pixels cover_crop(const Pixels &source, int w, int h, int radius)
+Pixels cover_crop(const Pixels &source, int w, int h, int radius, const std::uint32_t *background)
 {
     Pixels out;
     out.width = w;
@@ -113,6 +113,14 @@ Pixels cover_crop(const Pixels &source, int w, int h, int radius)
             {
                 const float dx = x + 0.5f - cx, dy = y + 0.5f - cy;
                 coverage = std::clamp(radius - std::sqrt(dx * dx + dy * dy) + 0.5f, 0.0f, 1.0f);
+            }
+            if (background)
+            {
+                // Flatten onto the tile colour: only the rounded corners keep transparency.
+                const float a = c[3] / 255.0f;
+                for (int k = 0; k < 3; ++k)
+                    c[k] = c[k] * a + static_cast<float>((*background >> (8 * k)) & 0xFF) * (1 - a);
+                c[3] = 255;
             }
             out.rgba[static_cast<std::size_t>(y) * w + x] = pack(c[0], c[1], c[2], c[3] * coverage);
         }

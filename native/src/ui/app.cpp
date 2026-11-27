@@ -24,8 +24,8 @@ namespace
 namespace theme
 {
 const Color bg{7, 10, 26};
-const Color panel{17, 21, 52, 236};
-const Color panel_hi{30, 36, 84, 245};
+const Color panel{17, 21, 52, 255};
+const Color panel_hi{30, 36, 84, 255};
 
 const Color accent{139, 92, 246};
 const Color accent2{88, 120, 255};
@@ -1434,7 +1434,7 @@ void App::draw_tile(const Game &game, float x, float y, float size, bool focused
 
 void App::draw_top_bar()
 {
-    gfx_.gradient_v({0, 0, kWidth, 150}, {5, 7, 20, 235}, {5, 7, 20, 0});
+    gfx_.top_shade();
     // Logo mark.
     const Rect mark{kMargin, 34, 58, 58};
     gfx_.glow(mark, 18, theme::accent.with_alpha(0.35f), 14);
@@ -1532,8 +1532,7 @@ void App::draw_hints()
             hints = {{Button::Cross, "Ändern"}, {Button::Circle, "Zurück"}};
         hints.push_back({Button::Options, "Einstellungen"});
     }
-    gfx_.gradient_v({0, kHeight - 150, kWidth, 70}, {6, 8, 22, 0}, {6, 8, 22, 235});
-    gfx_.fill({0, kHeight - 80, kWidth, 80}, {6, 8, 22, 235});
+    gfx_.bottom_shade();
     float x = kWidth - kMargin;
     for (auto it = hints.rbegin(); it != hints.rend(); ++it)
     {
@@ -1561,7 +1560,7 @@ void App::draw_discover()
                 return;
             const Game &g = games_[static_cast<std::size_t>(index)];
             if (!g.hero_url.empty())
-                if (const Texture *t = images_->get(g.hero_url, static_cast<int>(hero.w), static_cast<int>(hero.h), 30))
+                if (const Texture *t = images_->get(g.hero_url, static_cast<int>(hero.w), static_cast<int>(hero.h), 30, 2))
                 {
                     gfx_.image(*t, hero, alpha);
                     return;
@@ -1583,7 +1582,6 @@ void App::draw_discover()
             if (hero_fade_ < 1)
                 draw_hero_art(hero_previous_, 1 - hero_fade_);
             draw_hero_art(featured_[static_cast<std::size_t>(hero_)], hero_fade_);
-            gfx_.gradient_h({hero.x, hero.y, hero.w * 0.7f, hero.h}, {6, 8, 24, 235}, {6, 8, 24, 0});
             const Game &g = games_[static_cast<std::size_t>(featured_[static_cast<std::size_t>(hero_)])];
             const float tx = hero.x + 64;
             float by = hero.y + 56;
@@ -1978,10 +1976,9 @@ void App::draw_detail()
     const float alpha = std::min(1.0f, detail_anim_ * 1.6f);
     // Backdrop.
     const std::string backdrop = !g.hero_url.empty() ? g.hero_url : artwork(g);
-    if (const Texture *bg = images_->get(backdrop, 960, 540, 0))
+    if (const Texture *bg = images_->get(backdrop, kWidth, 700, 0, 1))
     {
-        gfx_.image_cover(*bg, {0, offset - 60, kWidth, 700}, 0.28f * alpha);
-        gfx_.gradient_v({0, offset + 340, kWidth, 300}, {4, 5, 16, 0}, {4, 5, 16, 255});
+        gfx_.image(*bg, {0, offset - 60, kWidth, 700}, alpha);
         gfx_.fill({0, offset + 640, kWidth, kHeight}, {4, 5, 16, 255});
     }
     // Cover.
@@ -2174,6 +2171,7 @@ void App::draw_toasts()
 
 void App::draw()
 {
+    gfx_.begin_frame();
     gfx_.background(settings_.reduce_motion || platform::is_console() ? -1 : time_);
     const float shift = (1 - fade_) * 24;
     (void)shift;

@@ -131,10 +131,15 @@ int main(int argc, char **argv)
         platform::quit();
     }
     const bool console = platform::is_console();
+    if (console)
+        SDL_SetHint(SDL_HINT_RENDER_DRIVER, "software"); // the PS5 SDL has only the software renderer
     const int window_w = console ? ui::kWidth : (screenshots.empty() ? 1600 : ui::kWidth);
     const int window_h = console ? ui::kHeight : (screenshots.empty() ? 900 : ui::kHeight);
-    SDL_Window *window = SDL_CreateWindow("Akeno Gaming Hub", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, window_w,
-                                          window_h, console ? SDL_WINDOW_FULLSCREEN : SDL_WINDOW_RESIZABLE);
+    // On the console: the window setup OpenRCT2 for PS5 uses on hardware (full-screen desktop at 0,0).
+    SDL_Window *window = console ? SDL_CreateWindow("Akeno Gaming Hub", 0, 0, window_w, window_h,
+                                                    SDL_WINDOW_FULLSCREEN_DESKTOP)
+                                 : SDL_CreateWindow("Akeno Gaming Hub", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
+                                                    window_w, window_h, SDL_WINDOW_RESIZABLE);
     if (!window)
     {
         platform::log("[akeno] window failed: %s", SDL_GetError());
@@ -148,9 +153,14 @@ int main(int argc, char **argv)
         platform::log("[akeno] renderer failed: %s", SDL_GetError());
         platform::quit();
     }
+    // The patched PS5 SDL draws a software pointer once the mouse position is set; going full
+    // screen puts it at 0,0. Akeno is controller-driven, so the pointer stays hidden.
+    SDL_ShowCursor(SDL_DISABLE);
     SDL_RendererInfo info{};
     SDL_GetRendererInfo(renderer, &info);
-    platform::log("[akeno] renderer %s", info.name);
+    int output_w = 0, output_h = 0;
+    SDL_GetRendererOutputSize(renderer, &output_w, &output_h);
+    platform::log("[akeno] renderer %s, output %dx%d", info.name, output_w, output_h);
     SDL_RenderSetLogicalSize(renderer, ui::kWidth, ui::kHeight);
 
     auto gfx = std::make_unique<ui::Gfx>(renderer);

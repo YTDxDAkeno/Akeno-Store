@@ -10,11 +10,14 @@
 
 #include "core/image.hpp"
 
+#include <array>
 #include <cstdint>
 #include <map>
+#include <tuple>
 #include <memory>
 #include <string>
 #include <string_view>
+#include <unordered_map>
 #include <vector>
 
 namespace akeno::ui
@@ -57,6 +60,11 @@ class Texture
     int width() const { return w_; }
     int height() const { return h_; }
     explicit operator bool() const { return texture_ != nullptr; }
+
+    // Rows above `corner` and below height-corner carry rounded-corner alpha; the rows between
+    // are fully opaque, so the software renderer can copy them without blending.
+    bool opaque_center = false;
+    int corner = 0;
 
   private:
     SDL_Texture *texture_ = nullptr;
@@ -111,12 +119,23 @@ class Gfx
     std::string ellipsize(std::string_view text, int size, float max_width, Weight weight = Weight::Regular);
 
     void set_clip(const Rect *rect);
+    // Per-frame housekeeping (text cache eviction). Call once before drawing a frame.
+    void begin_frame();
+    bool software() const { return software_; }
+    // Pre-baked shading behind the top bar and the button hints.
+    void top_shade();
+    void bottom_shade();
     // A rounded panel with a diagonal gradient, baked once and cached.
     const Texture &panel_texture(int w, int h, int radius, Color left, Color right);
 
   private:
     Font &font(int size, Weight weight);
     void corner_pass(const Rect &rect, float radius, Color color, SDL_Texture *mask, int mask_size);
+    // Four orientations (TL, TR, BL, BR) of a corner piece baked at its exact pixel size:
+    // kind 0 = filled quarter disc, 1 = quarter ring of `thickness`, 2 = soft glow falloff.
+    const Texture *corners(int kind, int radius, int thickness = 0);
+    void draw_corners(const Texture *set, int x0, int y0, int x1, int y1, int r, Color color);
+    std::map<std::tuple<int, int, int>, std::array<Texture, 4>> corner_sets_;
 
     SDL_Renderer *renderer_;
     std::string font_data_[2];
@@ -127,6 +146,20 @@ class Gfx
     Texture orb_;
     std::map<std::pair<int, int>, Texture> rings_;
     std::map<std::string, Texture> panels_;
+    struct Line
+    {
+        Texture texture;
+        float width = 0;
+        float left = 0; // offset of the bitmap from the pen origin
+        std::uint64_t used = 0;
+    };
+    Line &line(std::string_view text, int size, Weight weight);
+    std::unordered_map<std::string, Line> lines_;
+    std::unordered_map<std::string, std::vector<std::string>> layouts_;
+    std::unordered_map<std::string, std::string> fitted_;
+    std::uint64_t frame_ = 0;
+    bool software_ = false;
+    Texture top_shade_, bottom_shade_;
 };
 
 } // namespace akeno::ui

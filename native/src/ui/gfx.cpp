@@ -45,6 +45,8 @@ Texture &Texture::operator=(Texture &&other) noexcept
         texture_ = other.texture_;
         w_ = other.w_;
         h_ = other.h_;
+        opaque_center = other.opaque_center;
+        corner = other.corner;
         other.texture_ = nullptr;
         other.w_ = other.h_ = 0;
     }
@@ -127,6 +129,79 @@ class Font
 
     float ascent() const { return ascent_; }
     float line() const { return line_; }
+
+    // Rasterizes a whole line with subpixel positioning into an alpha bitmap.
+    // `left` receives the bitmap's x offset from the pen origin (may be negative).
+    std::vector<unsigned char> rasterize(std::string_view text, int &width, int &height, float &left) const
+    {
+        struct Placed
+        {
+            int cp;
+            float pen;
+        };
+        std::vector<Placed> placed;
+        float pen = 0;
+        int previous = 0;
+        std::size_t index = 0;
+        while (index < text.size())
+        {
+            int cp = static_cast<int>(next_codepoint(text, index));
+            if (cp == '\n')
+                break;
+            if (!stbtt_FindGlyphIndex(&info_, cp))
+                cp = (cp == 0x201E || cp == 0x201C || cp == 0x201D) ? '"' : (cp == 0x2018 || cp == 0x2019) ? '\'' : '?';
+            if (previous)
+                pen += stbtt_GetCodepointKernAdvance(&info_, previous, cp) * scale_;
+            placed.push_back({cp, pen});
+            int advance = 0, bearing = 0;
+            stbtt_GetCodepointHMetrics(&info_, cp, &advance, &bearing);
+            pen += advance * scale_;
+            previous = cp;
+        }
+        int x_min = 0, x_max = static_cast<int>(std::ceil(pen));
+        for (const Placed &p : placed)
+        {
+            int x0, y0, x1, y1;
+            const float shift = p.pen - std::floor(p.pen);
+            stbtt_GetCodepointBitmapBoxSubpixel(&info_, p.cp, scale_, scale_, shift, 0, &x0, &y0, &x1, &y1);
+            x_min = std::min(x_min, static_cast<int>(std::floor(p.pen)) + x0);
+            x_max = std::max(x_max, static_cast<int>(std::floor(p.pen)) + x1);
+        }
+        const int pad = 1;
+        width = std::max(1, x_max - x_min + 2 * pad);
+        height = static_cast<int>(std::ceil(line_)) + 2 * pad;
+        left = static_cast<float>(x_min - pad);
+        std::vector<unsigned char> bitmap(static_cast<std::size_t>(width) * height, 0);
+        std::vector<unsigned char> glyph;
+        const int baseline = static_cast<int>(std::lround(ascent_)) + pad;
+        for (const Placed &p : placed)
+        {
+            int x0, y0, x1, y1;
+            const float shift = p.pen - std::floor(p.pen);
+            stbtt_GetCodepointBitmapBoxSubpixel(&info_, p.cp, scale_, scale_, shift, 0, &x0, &y0, &x1, &y1);
+            const int gw = x1 - x0, gh = y1 - y0;
+            if (gw <= 0 || gh <= 0)
+                continue;
+            glyph.assign(static_cast<std::size_t>(gw) * gh, 0);
+            stbtt_MakeCodepointBitmapSubpixel(&info_, glyph.data(), gw, gh, gw, scale_, scale_, shift, 0, p.cp);
+            const int ox = static_cast<int>(std::floor(p.pen)) + x0 - x_min + pad, oy = baseline + y0;
+            for (int y = 0; y < gh; ++y)
+            {
+                const int ty = oy + y;
+                if (ty < 0 || ty >= height)
+                    continue;
+                for (int x = 0; x < gw; ++x)
+                {
+                    const int tx = ox + x;
+                    if (tx < 0 || tx >= width)
+                        continue;
+                    unsigned char &d = bitmap[static_cast<std::size_t>(ty) * width + tx];
+                    d = std::max(d, glyph[static_cast<std::size_t>(y) * gw + x]);
+                }
+            }
+        }
+        return bitmap;
+    }
     const Texture &atlas() const { return atlas_; }
     int side() const { return side_; }
 
@@ -163,6 +238,8 @@ std::uint32_t pack(float r, float g, float b, float a)
 Gfx::Gfx(SDL_Renderer *renderer) : renderer_(renderer)
 {
     SDL_SetRenderDrawBlendMode(renderer_, SDL_BLENDMODE_BLEND);
+    SDL_RendererInfo info{};
+    software_ = SDL_GetRendererInfo(renderer_, &info) == 0 && (info.flags & SDL_RENDERER_SOFTWARE);
     // Quarter disc for rounded corners: alpha 1 inside the radius, antialiased edge.
     constexpr int n = 64;
     std::vector<std::uint32_t> corner(n * n), glow(n * n);
@@ -206,7 +283,40 @@ Gfx::Gfx(SDL_Renderer *renderer) : renderer_(renderer)
             back[static_cast<std::size_t>(y * bw + x)] =
                 pack(r * vignette + noise, g * vignette + noise, b * vignette + noise, 255);
         }
-    backdrop_ = make_texture(renderer_, bw, bh, back, SDL_BLENDMODE_NONE);
+    // Upscaled once on the CPU to the full 1920x1080, so each frame is a plain unscaled copy.
+    std::vector<std::uint32_t> full(static_cast<std::size_t>(kWidth) * kHeight);
+    for (int y = 0; y < kHeight; ++y)
+        for (int x = 0; x < kWidth; ++x)
+        {
+            const float sx = std::max(0.0f, (x + 0.5f) * bw / kWidth - 0.5f), sy = std::max(0.0f, (y + 0.5f) * bh / kHeight - 0.5f);
+            const int x0 = std::min(static_cast<int>(sx), bw - 1), y0 = std::min(static_cast<int>(sy), bh - 1);
+            const int x1 = std::min(x0 + 1, bw - 1), y1 = std::min(y0 + 1, bh - 1);
+            const float fx = sx - x0, fy = sy - y0;
+            float c[3];
+            for (int k = 0; k < 3; ++k)
+            {
+                const auto ch = [&](int px, int py) { return static_cast<float>((back[static_cast<std::size_t>(py * bw + px)] >> (8 * k)) & 0xFF); };
+                c[k] = (ch(x0, y0) * (1 - fx) + ch(x1, y0) * fx) * (1 - fy) + (ch(x0, y1) * (1 - fx) + ch(x1, y1) * fx) * fy;
+            }
+            seed = seed * 1664525u + 1013904223u;
+            const float noise = ((seed >> 24) / 255.0f - 0.5f) * 1.5f;
+            full[static_cast<std::size_t>(y) * kWidth + x] = pack(c[0] + noise, c[1] + noise, c[2] + noise, 255);
+        }
+    backdrop_ = make_texture(renderer_, kWidth, kHeight, full, SDL_BLENDMODE_NONE);
+    // Shading behind the top bar and the hints: vertical alpha ramps of the backdrop's navy.
+    const auto shade = [&](int h, bool down) {
+        std::vector<std::uint32_t> px(static_cast<std::size_t>(kWidth) * h);
+        for (int y = 0; y < h; ++y)
+        {
+            const float t = down ? 1 - y / static_cast<float>(h - 1) : y / static_cast<float>(h - 1);
+            const float a = down ? 235 * t * t : (t < 0.45f ? 235 * (t / 0.45f) * (t / 0.45f) : 235);
+            const std::uint32_t value = pack(6, 8, 22, a);
+            std::fill(px.begin() + static_cast<std::ptrdiff_t>(y) * kWidth, px.begin() + static_cast<std::ptrdiff_t>(y + 1) * kWidth, value);
+        }
+        return make_texture(renderer_, kWidth, h, px);
+    };
+    top_shade_ = shade(130, true);
+    bottom_shade_ = shade(150, false);
     constexpr int on = 128;
     std::vector<std::uint32_t> orb(on * on);
     for (int y = 0; y < on; ++y)
@@ -261,8 +371,8 @@ void Gfx::clear(Color color)
 void Gfx::background(float time)
 {
     SDL_RenderCopy(renderer_, backdrop_.get(), nullptr, nullptr);
-    if (time < 0)
-        return; // reduced motion
+    if (time < 0 || software_)
+        return; // reduced motion, or the CPU renderer (large scaled blends cost too much there)
     // Two slow light orbs drifting over the backdrop.
     const auto orb = [&](float cx, float cy, float size, Color color) {
         SDL_SetTextureColorMod(orb_.get(), color.r, color.g, color.b);
@@ -279,65 +389,129 @@ void Gfx::fill(const Rect &rect, Color color)
 {
     SDL_SetRenderDrawColor(renderer_, color.r, color.g, color.b, color.a);
     const SDL_FRect r{rect.x, rect.y, rect.w, rect.h};
+    if (color.a == 255)
+    {
+        // SDL's software renderer blends per pixel even at full opacity; NONE is a plain fill.
+        SDL_SetRenderDrawBlendMode(renderer_, SDL_BLENDMODE_NONE);
+        SDL_RenderFillRectF(renderer_, &r);
+        SDL_SetRenderDrawBlendMode(renderer_, SDL_BLENDMODE_BLEND);
+        return;
+    }
     SDL_RenderFillRectF(renderer_, &r);
 }
 
+namespace
+{
+// Whole-pixel edges so neighbouring pieces neither overlap nor leave gaps (seams show in the
+// software renderer when two translucent pieces share a row).
+struct Box
+{
+    int x0, y0, x1, y1, r;
+};
+Box snap(const Rect &rect, float radius)
+{
+    Box b{static_cast<int>(std::lround(rect.x)), static_cast<int>(std::lround(rect.y)),
+          static_cast<int>(std::lround(rect.x + rect.w)), static_cast<int>(std::lround(rect.y + rect.h)), 0};
+    b.r = std::clamp(static_cast<int>(std::lround(radius)), 0, std::min(b.x1 - b.x0, b.y1 - b.y0) / 2);
+    return b;
+}
+} // namespace
+
+const Texture *Gfx::corners(int kind, int radius, int thickness)
+{
+    radius = std::clamp(radius, 1, 512);
+    auto &set = corner_sets_[{kind, radius, thickness}];
+    if (!set[0])
+    {
+        const int n = radius;
+        std::vector<std::uint32_t> base(static_cast<std::size_t>(n) * n);
+        for (int y = 0; y < n; ++y)
+            for (int x = 0; x < n; ++x)
+            {
+                // Top-left piece: the circle centre is the piece's bottom-right corner.
+                const float dx = n - (x + 0.5f), dy = n - (y + 0.5f);
+                const float d = std::sqrt(dx * dx + dy * dy);
+                float a = 0;
+                if (kind == 0)
+                    a = std::clamp(n - d + 0.5f, 0.0f, 1.0f);
+                else if (kind == 1)
+                    a = std::clamp(n - d + 0.5f, 0.0f, 1.0f) * std::clamp(d - (n - thickness) + 0.5f, 0.0f, 1.0f);
+                else
+                {
+                    const float t = std::clamp(d / n, 0.0f, 1.0f);
+                    a = (1 - t) * (1 - t) * (1 - t);
+                }
+                base[static_cast<std::size_t>(y) * n + x] = 0x00FFFFFFu | (static_cast<std::uint32_t>(a * 255 + 0.5f) << 24);
+            }
+        for (int o = 0; o < 4; ++o)
+        {
+            std::vector<std::uint32_t> px(base.size());
+            for (int y = 0; y < n; ++y)
+                for (int x = 0; x < n; ++x)
+                {
+                    const int sx = (o & 1) ? n - 1 - x : x, sy = (o & 2) ? n - 1 - y : y;
+                    px[static_cast<std::size_t>(y) * n + x] = base[static_cast<std::size_t>(sy) * n + sx];
+                }
+            set[static_cast<std::size_t>(o)] = make_texture(renderer_, n, n, px);
+        }
+    }
+    return set.data();
+}
+
+void Gfx::draw_corners(const Texture *set, int x0, int y0, int x1, int y1, int r, Color color)
+{
+    const SDL_Rect pieces[4] = {{x0, y0, r, r}, {x1 - r, y0, r, r}, {x0, y1 - r, r, r}, {x1 - r, y1 - r, r, r}};
+    for (int o = 0; o < 4; ++o)
+    {
+        SDL_Texture *t = set[o].get();
+        SDL_SetTextureColorMod(t, color.r, color.g, color.b);
+        SDL_SetTextureAlphaMod(t, color.a);
+        SDL_RenderCopy(renderer_, t, nullptr, &pieces[o]);
+    }
+}
+
+
 void Gfx::corner_pass(const Rect &rect, float radius, Color color, SDL_Texture *mask, int mask_size)
 {
+    (void)mask;
     (void)mask_size;
-    SDL_SetTextureColorMod(mask, color.r, color.g, color.b);
-    SDL_SetTextureAlphaMod(mask, color.a);
-    const float r = radius;
-    const SDL_FRect tl{rect.x, rect.y, r, r}, tr{rect.x + rect.w - r, rect.y, r, r},
-        bl{rect.x, rect.y + rect.h - r, r, r}, br{rect.x + rect.w - r, rect.y + rect.h - r, r, r};
-    SDL_RenderCopyExF(renderer_, mask, nullptr, &tl, 0, nullptr, SDL_FLIP_NONE);
-    SDL_RenderCopyExF(renderer_, mask, nullptr, &tr, 0, nullptr, SDL_FLIP_HORIZONTAL);
-    SDL_RenderCopyExF(renderer_, mask, nullptr, &bl, 0, nullptr, SDL_FLIP_VERTICAL);
-    SDL_RenderCopyExF(renderer_, mask, nullptr, &br, 0, nullptr,
-                      static_cast<SDL_RendererFlip>(SDL_FLIP_HORIZONTAL | SDL_FLIP_VERTICAL));
+    const Box b = snap(rect, radius);
+    if (b.r > 0)
+        draw_corners(corners(0, b.r), b.x0, b.y0, b.x1, b.y1, b.r, color);
 }
 
 void Gfx::rounded(const Rect &rect, float radius, Color color)
 {
-    radius = std::min({radius, rect.w / 2, rect.h / 2});
-    if (radius < 1)
+    const Box b = snap(rect, radius);
+    if (b.r < 1)
     {
-        fill(rect, color);
+        fill({static_cast<float>(b.x0), static_cast<float>(b.y0), static_cast<float>(b.x1 - b.x0),
+              static_cast<float>(b.y1 - b.y0)}, color);
         return;
     }
     corner_pass(rect, radius, color, corner_.get(), 64);
-    fill({rect.x + radius, rect.y, rect.w - 2 * radius, rect.h}, color);
-    fill({rect.x, rect.y + radius, radius, rect.h - 2 * radius}, color);
-    fill({rect.x + rect.w - radius, rect.y + radius, radius, rect.h - 2 * radius}, color);
+    const auto f = [](int x, int y, int w, int h) {
+        return Rect{static_cast<float>(x), static_cast<float>(y), static_cast<float>(w), static_cast<float>(h)};
+    };
+    fill(f(b.x0 + b.r, b.y0, b.x1 - b.x0 - 2 * b.r, b.y1 - b.y0), color);
+    fill(f(b.x0, b.y0 + b.r, b.r, b.y1 - b.y0 - 2 * b.r), color);
+    fill(f(b.x1 - b.r, b.y0 + b.r, b.r, b.y1 - b.y0 - 2 * b.r), color);
 }
 
 void Gfx::rounded_outline(const Rect &rect, float radius, float thickness, Color color)
 {
-    // Four straight edges plus corner arcs approximated by short segments.
-    radius = std::min({radius, rect.w / 2, rect.h / 2});
-    fill({rect.x + radius, rect.y, rect.w - 2 * radius, thickness}, color);
-    fill({rect.x + radius, rect.y + rect.h - thickness, rect.w - 2 * radius, thickness}, color);
-    fill({rect.x, rect.y + radius, thickness, rect.h - 2 * radius}, color);
-    fill({rect.x + rect.w - thickness, rect.y + radius, thickness, rect.h - 2 * radius}, color);
-    // Corners: an antialiased quarter ring, baked once per (radius, thickness).
-    const int r = std::max(1, static_cast<int>(std::lround(radius)));
-    const int t = std::max(1, static_cast<int>(std::lround(thickness)));
-    Texture &ring = rings_[{r, t}];
-    if (!ring)
-    {
-        std::vector<std::uint32_t> pixels(static_cast<std::size_t>(r) * r);
-        for (int y = 0; y < r; ++y)
-            for (int x = 0; x < r; ++x)
-            {
-                const float dx = r - (x + 0.5f), dy = r - (y + 0.5f);
-                const float d = std::sqrt(dx * dx + dy * dy);
-                const float outer = std::clamp(r - d + 0.5f, 0.0f, 1.0f);
-                const float inner = std::clamp(d - (r - t) + 0.5f, 0.0f, 1.0f);
-                pixels[static_cast<std::size_t>(y * r + x)] = pack(255, 255, 255, outer * inner * 255);
-            }
-        ring = make_texture(renderer_, r, r, pixels);
-    }
-    corner_pass(rect, radius, color, ring.get(), r);
+    // Four straight edges on whole pixels plus baked corner rings.
+    const Box b = snap(rect, radius);
+    radius = static_cast<float>(b.r);
+    const float t0 = std::max(1.0f, std::round(thickness));
+    const float x0 = b.x0, y0 = b.y0, w = b.x1 - b.x0, h = b.y1 - b.y0;
+    fill({x0 + radius, y0, w - 2 * radius, t0}, color);
+    fill({x0 + radius, y0 + h - t0, w - 2 * radius, t0}, color);
+    fill({x0, y0 + radius, t0, h - 2 * radius}, color);
+    fill({x0 + w - t0, y0 + radius, t0, h - 2 * radius}, color);
+    // Corners: antialiased quarter rings baked at their exact size.
+    if (b.r > 0)
+        draw_corners(corners(1, b.r, static_cast<int>(t0)), b.x0, b.y0, b.x1, b.y1, b.r, color);
 }
 
 const Texture &Gfx::panel_texture(int w, int h, int radius, Color left, Color right)
@@ -371,26 +545,57 @@ const Texture &Gfx::panel_texture(int w, int h, int radius, Color left, Color ri
             pixels.rgba[static_cast<std::size_t>(y) * w + x] = pack(r, g, b, 255);
         }
     slot = upload(cover_crop(pixels, w, h, radius));
+    slot.opaque_center = true;
+    slot.corner = radius;
     return slot;
 }
 
 void Gfx::glow(const Rect &rect, float radius, Color color, float spread)
 {
     const Rect outer{rect.x - spread, rect.y - spread, rect.w + 2 * spread, rect.h + 2 * spread};
-    const float r = std::min({radius + spread, outer.w / 2, outer.h / 2});
-    SDL_Texture *mask = glow_corner_.get();
-    corner_pass(outer, r, color, mask, 64);
-    SDL_SetTextureColorMod(mask, color.r, color.g, color.b);
-    SDL_SetTextureAlphaMod(mask, color.a);
+    const Box b = snap(outer, radius + spread);
+    if (b.r <= 0)
+        return;
+    const Texture *set = corners(2, b.r);
+    draw_corners(set, b.x0, b.y0, b.x1, b.y1, b.r, color);
     // Edges: one column (or row) of the falloff stretched along each side.
-    const SDL_Rect column{63, 0, 1, 64}, row{0, 63, 64, 1};
-    const SDL_FRect top{outer.x + r, outer.y, outer.w - 2 * r, r}, bottom{outer.x + r, outer.y + outer.h - r, outer.w - 2 * r, r};
-    const SDL_FRect left{outer.x, outer.y + r, r, outer.h - 2 * r}, right{outer.x + outer.w - r, outer.y + r, r, outer.h - 2 * r};
-    SDL_RenderCopyExF(renderer_, mask, &column, &top, 0, nullptr, SDL_FLIP_NONE);
-    SDL_RenderCopyExF(renderer_, mask, &column, &bottom, 0, nullptr, SDL_FLIP_VERTICAL);
-    SDL_RenderCopyExF(renderer_, mask, &row, &left, 0, nullptr, SDL_FLIP_NONE);
-    SDL_RenderCopyExF(renderer_, mask, &row, &right, 0, nullptr, SDL_FLIP_HORIZONTAL);
-    fill({outer.x + r, outer.y + r, outer.w - 2 * r, outer.h - 2 * r}, color);
+    const int r = b.r, w = b.x1 - b.x0, h = b.y1 - b.y0;
+    const SDL_Rect column{r - 1, 0, 1, r}, row{0, r - 1, r, 1};
+    const SDL_Rect column_bottom{r - 1, 0, 1, r}, row_right{0, r - 1, r, 1};
+    const SDL_Rect top{b.x0 + r, b.y0, w - 2 * r, r}, bottom{b.x0 + r, b.y1 - r, w - 2 * r, r};
+    const SDL_Rect left{b.x0, b.y0 + r, r, h - 2 * r}, right{b.x1 - r, b.y0 + r, r, h - 2 * r};
+    SDL_RenderCopy(renderer_, set[0].get(), &column, &top);
+    SDL_RenderCopy(renderer_, set[2].get(), &column_bottom, &bottom);
+    SDL_RenderCopy(renderer_, set[0].get(), &row, &left);
+    SDL_RenderCopy(renderer_, set[1].get(), &row_right, &right);
+    // The element drawn on top covers the centre; only small glows (text highlights) fill it.
+    if (rect.w * rect.h < 40000)
+        fill({static_cast<float>(b.x0 + r), static_cast<float>(b.y0 + r), static_cast<float>(w - 2 * r),
+              static_cast<float>(h - 2 * r)}, color);
+}
+
+void Gfx::top_shade()
+{
+    const SDL_Rect dst{0, 0, kWidth, top_shade_.height()};
+    SDL_RenderCopy(renderer_, top_shade_.get(), nullptr, &dst);
+}
+
+void Gfx::bottom_shade()
+{
+    const SDL_Rect dst{0, kHeight - bottom_shade_.height(), kWidth, bottom_shade_.height()};
+    SDL_RenderCopy(renderer_, bottom_shade_.get(), nullptr, &dst);
+}
+
+void Gfx::begin_frame()
+{
+    ++frame_;
+    if (lines_.size() > 900)
+        for (auto it = lines_.begin(); it != lines_.end();)
+            it = it->second.used + 90 < frame_ ? lines_.erase(it) : std::next(it);
+    if (layouts_.size() > 400)
+        layouts_.clear();
+    if (fitted_.size() > 1500)
+        fitted_.clear();
 }
 
 void Gfx::gradient_h(const Rect &rect, Color left, Color right)
@@ -421,10 +626,33 @@ void Gfx::image(const Texture &texture, const Rect &rect, float alpha)
 {
     if (!texture)
         return;
+    const auto a = static_cast<std::uint8_t>(std::clamp(alpha, 0.0f, 1.0f) * 255);
     SDL_SetTextureColorMod(texture.get(), 255, 255, 255);
-    SDL_SetTextureAlphaMod(texture.get(), static_cast<std::uint8_t>(std::clamp(alpha, 0.0f, 1.0f) * 255));
+    SDL_SetTextureAlphaMod(texture.get(), a);
     const SDL_FRect dst{rect.x, rect.y, rect.w, rect.h};
-    SDL_RenderCopyF(renderer_, texture.get(), nullptr, &dst);
+    if (!texture.opaque_center || a != 255 || texture.height() <= 2 * texture.corner)
+    {
+        SDL_RenderCopyF(renderer_, texture.get(), nullptr, &dst);
+        return;
+    }
+    // Opaque middle band without blending; only the rounded top and bottom rows blend.
+    // Bands are placed on whole pixels so they meet exactly when the tile is scaled.
+    const int w = texture.width(), h = texture.height(), c = texture.corner;
+    const int x0 = static_cast<int>(std::lround(rect.x)), y0 = static_cast<int>(std::lround(rect.y));
+    const int x1 = static_cast<int>(std::lround(rect.x + rect.w)), y1 = static_cast<int>(std::lround(rect.y + rect.h));
+    const int band = static_cast<int>(std::lround(c * (y1 - y0) / static_cast<float>(h)));
+    if (c > 0)
+    {
+        const SDL_Rect top{0, 0, w, c}, bottom{0, h - c, w, c};
+        const SDL_Rect dtop{x0, y0, x1 - x0, band}, dbottom{x0, y1 - band, x1 - x0, band};
+        SDL_RenderCopy(renderer_, texture.get(), &top, &dtop);
+        SDL_RenderCopy(renderer_, texture.get(), &bottom, &dbottom);
+    }
+    const SDL_Rect middle{0, c, w, h - 2 * c};
+    const SDL_Rect dmiddle{x0, y0 + band, x1 - x0, y1 - y0 - 2 * band};
+    SDL_SetTextureBlendMode(texture.get(), SDL_BLENDMODE_NONE);
+    SDL_RenderCopy(renderer_, texture.get(), &middle, &dmiddle);
+    SDL_SetTextureBlendMode(texture.get(), SDL_BLENDMODE_BLEND);
 }
 
 void Gfx::image_cover(const Texture &texture, const Rect &rect, float alpha)
@@ -447,52 +675,63 @@ void Gfx::circle(float cx, float cy, float radius, Color color)
     rounded({cx - radius, cy - radius, 2 * radius, 2 * radius}, radius, color);
 }
 
+Gfx::Line &Gfx::line(std::string_view text, int size, Weight weight)
+{
+    std::string key = std::to_string(size) + (weight == Weight::Bold ? "b|" : "r|");
+    key.append(text);
+    Line &entry = lines_[key];
+    entry.used = frame_;
+    if (!entry.texture && !text.empty())
+    {
+        Font &f = font(size, weight);
+        int w = 0, h = 0;
+        float left = 0;
+        const std::vector<unsigned char> alpha = f.rasterize(text, w, h, left);
+        std::vector<std::uint32_t> rgba(alpha.size());
+        for (std::size_t i = 0; i < alpha.size(); ++i)
+            rgba[i] = 0x00FFFFFFu | (static_cast<std::uint32_t>(alpha[i]) << 24);
+        entry.texture = make_texture(renderer_, w, h, rgba);
+        entry.left = left;
+        entry.width = measure(text, size, weight);
+    }
+    return entry;
+}
+
 float Gfx::text(std::string_view text, float x, float y, int size, Color color, Weight weight, Align align,
                 float max_width)
 {
     std::string fitted;
-    if (max_width > 0 && measure(text, size, weight) > max_width)
+    if (max_width > 0)
     {
-        fitted = ellipsize(text, size, max_width, weight);
+        std::string key = std::to_string(size) + (weight == Weight::Bold ? "b" : "r") + std::to_string(static_cast<int>(max_width)) + "|";
+        key.append(text);
+        auto it = fitted_.find(key);
+        if (it == fitted_.end())
+            it = fitted_.emplace(key, measure(text, size, weight) > max_width ? ellipsize(text, size, max_width, weight)
+                                                                               : std::string(text)).first;
+        fitted = it->second;
         text = fitted;
     }
-    Font &f = font(size, weight);
-    const float width = measure(text, size, weight);
+    const std::size_t newline = text.find('\n');
+    if (newline != std::string_view::npos)
+        text = text.substr(0, newline);
+    if (text.empty())
+        return 0;
+    Line &l = line(text, size, weight);
     if (align == Align::Center)
-        x -= width / 2;
+        x -= l.width / 2;
     else if (align == Align::Right)
-        x -= width;
-    SDL_Texture *atlas = f.atlas().get();
-    if (!atlas)
-        return width;
-    SDL_SetTextureColorMod(atlas, color.r, color.g, color.b);
-    SDL_SetTextureAlphaMod(atlas, color.a);
-    float pen = x;
-    const float baseline = y + f.ascent();
-    std::uint32_t previous = 0;
-    std::size_t index = 0;
-    while (index < text.size())
+        x -= l.width;
+    if (l.texture)
     {
-        const std::uint32_t code = next_codepoint(text, index);
-        if (code == '\n')
-            break;
-        const stbtt_packedchar *g = f.glyph(code);
-        if (!g)
-            continue;
-        pen += f.kern(previous, code);
-        previous = code;
-        stbtt_aligned_quad q;
-        float px = pen, py = baseline;
-        stbtt_GetPackedQuad(g, f.side(), f.side(), 0, &px, &py, &q, 0);
-        const SDL_Rect src{static_cast<int>(q.s0 * f.side()), static_cast<int>(q.t0 * f.side()),
-                           static_cast<int>((q.s1 - q.s0) * f.side() + 0.5f),
-                           static_cast<int>((q.t1 - q.t0) * f.side() + 0.5f)};
-        const SDL_FRect dst{q.x0, q.y0, q.x1 - q.x0, q.y1 - q.y0};
-        if (src.w > 0 && src.h > 0)
-            SDL_RenderCopyF(renderer_, atlas, &src, &dst);
-        pen = px;
+        SDL_SetTextureColorMod(l.texture.get(), color.r, color.g, color.b);
+        SDL_SetTextureAlphaMod(l.texture.get(), color.a);
+        // Whole pixels keep the cached bitmap sharp (no resampling in the software renderer).
+        const SDL_Rect dst{static_cast<int>(std::lround(x + l.left)), static_cast<int>(std::lround(y - 1)),
+                           l.texture.width(), l.texture.height()};
+        SDL_RenderCopy(renderer_, l.texture.get(), nullptr, &dst);
     }
-    return width;
+    return l.width;
 }
 
 float Gfx::measure(std::string_view text, int size, Weight weight)
@@ -539,44 +778,60 @@ std::string Gfx::ellipsize(std::string_view text, int size, float max_width, Wei
 float Gfx::paragraph(std::string_view text, const Rect &box, int size, Color color, int max_lines, Weight weight,
                      float line_height)
 {
+    std::string key = std::to_string(size) + (weight == Weight::Bold ? "b" : "r") + std::to_string(static_cast<int>(box.w)) +
+                      "/" + std::to_string(max_lines) + "/" + std::to_string(static_cast<int>(box.h)) + "|";
+    key.append(text);
+    auto it = layouts_.find(key);
+    if (it == layouts_.end())
+    {
+        std::vector<std::string> lines;
+        const float advance = size * line_height;
+        const int capacity = std::max(1, std::min(max_lines > 0 ? max_lines : 1000, static_cast<int>(box.h / advance) + 1));
+        bool cut = false;
+        for (const std::string &raw : split(text, '\n'))
+        {
+            std::string current;
+            for (const std::string &word : split(raw, ' '))
+            {
+                const std::string candidate = current.empty() ? word : current + " " + word;
+                if (current.empty() || measure(candidate, size, weight) <= box.w)
+                {
+                    current = candidate;
+                    continue;
+                }
+                lines.push_back(current);
+                current = word;
+                if (static_cast<int>(lines.size()) >= capacity)
+                {
+                    cut = true;
+                    break;
+                }
+            }
+            if (cut)
+                break;
+            lines.push_back(current);
+            if (static_cast<int>(lines.size()) >= capacity)
+            {
+                cut = lines.size() < split(text, '\n').size() || cut;
+                break;
+            }
+        }
+        if (static_cast<int>(lines.size()) > capacity)
+            lines.resize(static_cast<std::size_t>(capacity));
+        if (cut && !lines.empty())
+            lines.back() = ellipsize(lines.back() + " …", size, box.w, weight);
+        for (std::string &l : lines)
+            if (measure(l, size, weight) > box.w)
+                l = ellipsize(l, size, box.w, weight);
+        it = layouts_.emplace(key, std::move(lines)).first;
+    }
     const float advance = size * line_height;
     float y = box.y;
-    int lines = 0;
-    for (const std::string &raw : split(text, '\n'))
+    for (const std::string &l : it->second)
     {
-        std::string line;
-        const auto words = split(raw, ' ');
-        for (std::size_t i = 0; i < words.size(); ++i)
-        {
-            const std::string candidate = line.empty() ? words[i] : line + " " + words[i];
-            if (measure(candidate, size, weight) <= box.w || line.empty())
-            {
-                line = candidate;
-                continue;
-            }
-            if (lines + 1 == max_lines)
-            {
-                std::string rest = line;
-                for (std::size_t j = i; j < words.size(); ++j)
-                    rest += " " + words[j];
-                this->text(ellipsize(rest, size, box.w, weight), box.x, y, size, color, weight);
-                return y + advance - box.y;
-            }
-            this->text(line, box.x, y, size, color, weight);
-            y += advance;
-            ++lines;
-            line = words[i];
-        }
-        if (lines + 1 >= max_lines && max_lines > 0)
-        {
-            this->text(ellipsize(line, size, box.w, weight), box.x, y, size, color, weight);
-            return y + advance - box.y;
-        }
-        this->text(line, box.x, y, size, color, weight);
+        if (!l.empty())
+            this->text(l, box.x, y, size, color, weight);
         y += advance;
-        ++lines;
-        if (y > box.y + box.h)
-            break;
     }
     return y - box.y;
 }

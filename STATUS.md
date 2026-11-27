@@ -43,6 +43,14 @@ jeweiligen Upstream-Projekte für ihre Firmware; **Akeno selbst hat kein Spiel a
 Weiterhin lauffähig: lokaler Web-Hub mit HTML5-Player, Signal Drift, geprüften ZIP-Installationen und
 Kompatibilitätsdatenbank. 52 Tests grün; ProsperoStore jetzt mit vollständigem signiertem Index.
 
+## Leistung des Software-Renderers
+
+Die PS5-SDL hat nur den Software-Renderer. Gemessen mit demselben Renderpfad auf dem Linux-Host
+(`SDL_RENDER_DRIVER=software`, geteilter Cloud-Xeon 2,3 GHz, 1920×1080): nach der Optimierung
+(vorgebackener Hintergrund und Effekte, gecachte Textzeilen, deckende Flächen ohne Blending,
+pixelgenaue Ecken) 16 ms pro Frame in allen Tabs, 20–23 ms auf textlastigen Detailseiten; vorher
+26–56 ms. Das ist ein Anhaltspunkt, **keine Messung auf der PS5**.
+
 ## Tests
 
 | Suite | Ergebnis |

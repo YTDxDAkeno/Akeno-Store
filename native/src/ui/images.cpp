@@ -30,11 +30,12 @@ ImageCache::~ImageCache()
         thread.join();
 }
 
-const Texture *ImageCache::get(const std::string &source, int w, int h, int radius)
+const Texture *ImageCache::get(const std::string &source, int w, int h, int radius, int effect)
 {
     if (source.empty())
         return nullptr;
-    const std::string key = source + "|" + std::to_string(w) + "x" + std::to_string(h) + "r" + std::to_string(radius);
+    const std::string key = source + "|" + std::to_string(w) + "x" + std::to_string(h) + "e" + std::to_string(effect) +
+                            "r" + std::to_string(radius);
     Slot &slot = slots_[key];
     slot.used = frame_;
     if (slot.texture)
@@ -44,7 +45,7 @@ const Texture *ImageCache::get(const std::string &source, int w, int h, int radi
         slot.queued = true;
         std::lock_guard lock(mutex_);
         // Newest requests first: what is on screen now matters most.
-        queue_.push_front({key, source, w, h, radius});
+        queue_.push_front({key, source, w, h, radius, effect});
         if (queue_.size() > 400)
         {
             // slots_ belongs to the render thread (this one); a dropped request may be asked again.
@@ -79,6 +80,8 @@ void ImageCache::pump(int budget)
     {
         Slot &slot = slots_[key];
         slot.texture = gfx_.upload(pixels);
+        slot.texture.opaque_center = true;
+        slot.texture.corner = static_cast<int>(std::stoi(key.substr(key.rfind('r') + 1)));
         slot.queued = false;
         slot.failed = !slot.texture;
     }
@@ -136,7 +139,37 @@ bool ImageCache::load(const Request &request, Pixels &out)
     Pixels decoded;
     if (!decode_image(encoded, request.w * 2, request.h * 2, decoded))
         return false;
-    out = cover_crop(decoded, request.w, request.h, request.radius);
+    static const std::uint32_t tile = 0xFF54241Eu; // theme panel_hi (30, 36, 84)
+    out = cover_crop(decoded, request.w, request.h, request.radius, &tile);
+    const auto blend = [](std::uint32_t &pixel, float r, float g, float b, float k) {
+        float c[3] = {static_cast<float>(pixel & 0xFF), static_cast<float>((pixel >> 8) & 0xFF),
+                      static_cast<float>((pixel >> 16) & 0xFF)};
+        const float target[3] = {r, g, b};
+        for (int i = 0; i < 3; ++i)
+            c[i] = c[i] * (1 - k) + target[i] * k;
+        pixel = (pixel & 0xFF000000u) | static_cast<std::uint32_t>(c[0]) | static_cast<std::uint32_t>(c[1]) << 8 |
+                static_cast<std::uint32_t>(c[2]) << 16;
+    };
+    if (request.effect == 1)
+    {
+        // Page backdrop: 30 % of the picture over the navy page colour, fading out at the bottom.
+        for (int y = 0; y < out.height; ++y)
+        {
+            const float fade = std::clamp((y - out.height * 0.45f) / (out.height * 0.55f), 0.0f, 1.0f);
+            for (int x = 0; x < out.width; ++x)
+                blend(out.rgba[static_cast<std::size_t>(y) * out.width + x], 5, 7, 20, 0.7f + 0.3f * fade);
+        }
+    }
+    else if (request.effect == 2)
+    {
+        // Hero art: darken the left 70 % so the title stays readable.
+        for (int y = 0; y < out.height; ++y)
+            for (int x = 0; x < out.width; ++x)
+            {
+                const float t = std::clamp(x / (out.width * 0.7f), 0.0f, 1.0f);
+                blend(out.rgba[static_cast<std::size_t>(y) * out.width + x], 6, 8, 24, 0.92f * (1 - t) * (1 - t));
+            }
+    }
     return true;
 }
 

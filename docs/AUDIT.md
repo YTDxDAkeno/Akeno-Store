@@ -1,7 +1,7 @@
 # Audit der Codex-Codebasis (27. November 2026)
 
-Geprüft wurde der Stand `046cedc` (Branch `codex/akeno-native-alpha`). Der Stand ist als
-Git-Tag `checkpoint/codex-baseline` erhalten. Die Tabelle nennt jeden Befund und was geändert wurde.
+Geprüft wurde der Stand `046cedc`. Er bleibt unverändert auf dem Branch `codex/akeno-native-alpha`
+erhalten; die Arbeit setzt darauf auf. Die Tabelle nennt jeden Befund und was geändert wurde.
 
 ## Architektur und falsche Annahmen
 

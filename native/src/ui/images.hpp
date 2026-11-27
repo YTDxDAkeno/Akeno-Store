@@ -25,7 +25,9 @@ class ImageCache
 
     // The texture for `source` (an HTTPS URL or an absolute file path) cropped to w x h
     // with rounded corners, or nullptr while it loads / when it cannot be loaded.
-    const Texture *get(const std::string &source, int w, int h, int radius = 0);
+    // `effect`: 0 plain, 1 dimmed page backdrop fading into the background, 2 hero art with
+    // a dark left side for text. Effects are baked in once, so frames copy opaque pixels.
+    const Texture *get(const std::string &source, int w, int h, int radius = 0, int effect = 0);
     // Uploads decoded images; call once per frame on the render thread.
     void pump(int budget = 3);
     // Requests that were asked for this frame are kept; others become evictable.
@@ -36,7 +38,7 @@ class ImageCache
     struct Request
     {
         std::string key, source;
-        int w, h, radius;
+        int w, h, radius, effect;
     };
     struct Slot
     {
