@@ -1,0 +1,17 @@
+:root { color-scheme: dark; font: 16px system-ui; background: #101120; color: #ededff; }
+body { min-height: 100vh; display: grid; margin: 0; place-items: center; }
+main { width: min(89%, 32rem); padding: 1rem 0; }
+header { display: flex; align-items: center; justify-content: space-between; gap: 1rem; }
+h1 { margin: 0; font-size: clamp(1.7rem,5vw,3rem); letter-spacing: -.05em; }
+.label { color: #c0b7f7; margin: 0; }
+#board { display: grid; grid-template-columns: repeat(6, 1fr); gap: .4rem; }
+.cell { border-radius: .6rem; background: #1c2134; aspect-ratio: 1.25; display: grid; place-items: center; font-size: clamp(1rem,4vw,1.8rem); }
+.wall { background: #333b52; }
+.relay { color: #7aead5; }
+.goal { color: #151027; background: #b99af4; }
+.player { background: #73e6cd; color: #102325; }
+#status { min-height: 2em; }
+button { background: #272541; color: #f4efff; border: 1px solid #565477; padding: .55rem .65rem; border-radius: .4rem; cursor: pointer; }
+button:focus-visible { outline: 2px solid #85ffe4; outline-offset: 3px; }
+.keys { display: flex; gap: .4rem; margin-bottom: .75rem; }
+.keys button { min-width: 2.8rem; min-height: 2.8rem; }

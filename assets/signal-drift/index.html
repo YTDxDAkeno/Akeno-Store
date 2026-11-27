@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Signal Drift</title>
+<link href="game.css" rel="stylesheet">
+<script src="game.js" defer></script>
+</head>
+<body>
+<main>
+  <header><div><p class="label">Akeno Arcade</p><h1>Signal Drift</h1></div><button id="reset" type="button">Neu beginnen</button></header>
+  <p>Verbinde drei Relais. Erreiche danach das violette Zielfeld.</p>
+  <div id="board" aria-label="Spielfeld" role="img"></div>
+  <p id="status" aria-live="polite"></p>
+  <div class="keys" aria-label="Richtungssteuerung">
+    <button type="button" data-move="ArrowLeft" aria-label="Links">←</button>
+    <button type="button" data-move="ArrowUp" aria-label="Nach oben">↑</button>
+    <button type="button" data-move="ArrowDown" aria-label="Nach unten">↓</button>
+    <button type="button" data-move="ArrowRight" aria-label="Rechts">→</button>
+  </div>
+  <p class="label">Pfeiltasten, Steuerkreuz oder Bildschirmtasten</p>
+</main>
+</body>
+</html>

@@ -1,0 +1,136 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#10101a">
+  <meta name="description" content="Spielekatalog und lokale Spielebibliothek von Akeno Gaming Hub.">
+  <title>Akeno Gaming Hub</title>
+  <link rel="stylesheet" href="/styles.css">
+  <script defer src="/app.js"></script>
+</head>
+<body>
+  <a class="skip" href="#content">Zum Inhalt</a>
+  <div class="shell">
+    <aside class="sidebar">
+      <div class="brand">
+        <span class="brand-mark" aria-hidden="true"><i></i></span>
+        <span><strong>AKENO</strong><small>GAMING HUB</small></span>
+      </div>
+      <nav aria-label="Hauptnavigation" id="navigation">
+        <button type="button" data-view="discover" aria-current="page"><span class="nav-symbol" aria-hidden="true">⌂</span>Entdecken</button>
+        <button type="button" data-view="library"><span class="nav-symbol nav-tiles" aria-hidden="true">▦</span>Bibliothek<span class="nav-count" id="library-count" hidden></span></button>
+        <button type="button" data-view="downloads"><span class="nav-symbol" aria-hidden="true">↓</span>Downloads<span class="nav-count" id="download-count" hidden></span></button>
+        <button type="button" data-view="runtimes"><span class="nav-symbol" aria-hidden="true">◈</span>Runtimes</button>
+        <button type="button" data-view="diagnostics"><span class="nav-symbol" aria-hidden="true">≋</span>Diagnose</button>
+      </nav>
+      <div class="sidebar-end">
+        <span class="platform-label" id="platform">Host</span>
+        <span class="edition">PS5 Edition</span>
+      </div>
+    </aside>
+
+    <div class="workspace">
+      <header class="topbar">
+        <p class="view-label" id="view-label">Entdecken</p>
+        <form id="search-form" role="search">
+          <label class="sr-only" for="search">Spiele suchen</label>
+          <span class="search-icon" aria-hidden="true">⌕</span>
+          <input id="search" type="search" placeholder="Spiele suchen" autocomplete="off">
+        </form>
+      </header>
+
+      <main id="content" tabindex="-1">
+        <section id="discover" aria-labelledby="discover-title">
+          <div class="hero">
+            <div class="hero-copy">
+              <p class="overline">AKENO GAMING HUB</p>
+              <h1 id="discover-title">Spiele entdecken</h1>
+              <p id="hero-description">Durchsuche den Katalog und lege deine lokale Bibliothek an.</p>
+              <div class="hero-actions">
+                <button class="primary" id="hero-game" type="button" hidden>Spieldetails</button>
+                <button class="secondary" id="sync-button" type="button"><span aria-hidden="true">⟳</span> Katalog aktualisieren</button>
+              </div>
+            </div>
+          </div>
+          <div class="catalog-heading">
+            <div><h2>Spielekatalog</h2><p id="catalog-count"></p></div>
+            <div class="filters">
+              <div class="select-wrap">
+                <label class="sr-only" for="provider-filter">Quelle</label>
+                <select id="provider-filter"><option value="">Alle Quellen</option></select>
+              </div>
+              <div class="select-wrap">
+                <label class="sr-only" for="availability-filter">Verfügbarkeit</label>
+                <select id="availability-filter">
+                  <option value="">Alle Einträge</option>
+                  <option value="installable">Installierbar</option>
+                  <option value="installed">Installiert</option>
+                </select>
+              </div>
+              <div class="select-wrap">
+                <label class="sr-only" for="mode-filter">Spielmodus</label>
+                <select id="mode-filter">
+                  <option value="">Alle Spielmodi</option>
+                  <option value="singleplayer">Singleplayer</option>
+                  <option value="multiplayer">Multiplayer</option>
+                </select>
+              </div>
+            </div>
+          </div>
+          <div id="catalog-errors"></div>
+          <div class="game-grid" id="catalog-grid"></div>
+        </section>
+
+        <section id="library" class="subview" aria-labelledby="library-title" hidden>
+          <h1 id="library-title">Bibliothek</h1>
+          <p class="section-intro">Deine lokal installierten Spiele.</p>
+          <div class="game-grid" id="library-grid"></div>
+        </section>
+
+        <section id="downloads" class="subview" aria-labelledby="downloads-title" hidden>
+          <h1 id="downloads-title">Downloads</h1>
+          <p class="section-intro">Fortschritt und Ergebnis deiner Installationen.</p>
+          <div class="stack" id="job-list"></div>
+        </section>
+
+        <section id="runtimes" class="subview" aria-labelledby="runtimes-title" hidden>
+          <h1 id="runtimes-title">Runtimes</h1>
+          <p class="section-intro">Verfügbare Laufzeitumgebungen dieser Instanz.</p>
+          <div class="stack" id="runtime-list"></div>
+        </section>
+
+        <section id="diagnostics" class="subview" aria-labelledby="diagnostics-title" hidden>
+          <h1 id="diagnostics-title">Diagnose</h1>
+          <p class="section-intro">Prüfe den Zustand des Hubs und der Katalogquellen.</p>
+          <div class="stack" id="diagnostic-list"></div>
+          <h2 class="subheading">Kompatibilitätsdatenbank</h2>
+          <div class="stack" id="compatibility-list"></div>
+        </section>
+      </main>
+
+      <footer class="command-bar">
+        <span id="controller-state">Tastatursteuerung</span>
+        <span><kbd id="direction-hint">↑ ↓ ← →</kbd> Navigieren</span>
+        <span><kbd id="confirm-hint">Enter</kbd> Auswählen</span>
+        <span><kbd id="back-hint">Esc</kbd> Zurück</span>
+      </footer>
+    </div>
+  </div>
+
+  <dialog id="game-dialog" aria-labelledby="detail-title">
+    <div class="detail-header">
+      <p class="overline" id="detail-source"></p>
+      <button id="detail-close" class="icon-button" type="button" aria-label="Details schließen">×</button>
+    </div>
+    <h2 id="detail-title"></h2>
+    <div class="detail-media" id="detail-media"></div>
+    <p class="detail-description" id="detail-description"></p>
+    <dl class="facts" id="detail-facts"></dl>
+    <p class="detail-note" id="detail-note" aria-live="polite"></p>
+    <div class="detail-actions" id="detail-actions"></div>
+  </dialog>
+
+  <div id="announcement" class="announcement" role="status" hidden></div>
+</body>
+</html>

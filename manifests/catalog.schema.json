@@ -1,0 +1,55 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Akeno HTML5 game catalog, version 1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "games"],
+  "properties": {
+    "schema_version": {
+      "const": 1
+    },
+    "games": {
+      "type": "array",
+      "maxItems": 200,
+      "items": { "$ref": "#/$defs/game" }
+    }
+  },
+  "$defs": {
+    "httpsUrl": {
+      "type": "string",
+      "format": "uri",
+      "pattern": "^https://",
+      "maxLength": 2048
+    },
+    "game": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id", "title", "version", "runtime", "architecture", "license",
+        "archive_url", "sha256", "entrypoint"
+      ],
+      "properties": {
+        "id": { "type": "string", "pattern": "^[a-z0-9][a-z0-9._-]{0,79}$" },
+        "title": { "type": "string", "minLength": 1, "maxLength": 160 },
+        "version": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "runtime": { "const": "html5" },
+        "architecture": { "const": "any" },
+        "license": { "type": "string", "minLength": 1, "maxLength": 160 },
+        "archive_url": { "$ref": "#/$defs/httpsUrl" },
+        "sha256": { "type": "string", "pattern": "^[a-fA-F0-9]{64}$" },
+        "entrypoint": { "type": "string", "minLength": 1, "maxLength": 512 },
+        "description": { "type": "string", "minLength": 1, "maxLength": 2000 },
+        "source_url": { "$ref": "#/$defs/httpsUrl" },
+        "developer": { "type": "string", "minLength": 1, "maxLength": 160 },
+        "genre": { "type": "string", "minLength": 1, "maxLength": 60 },
+        "cover_url": { "$ref": "#/$defs/httpsUrl" },
+        "screenshots": {
+          "type": "array",
+          "maxItems": 6,
+          "items": { "$ref": "#/$defs/httpsUrl" }
+        },
+        "age_rating": { "enum": ["all", "teen", "unrated", "restricted"] }
+      }
+    }
+  }
+}

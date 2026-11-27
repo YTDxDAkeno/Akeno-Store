@@ -1,0 +1,46 @@
+#ifndef AKENO_FONT_H
+#define AKENO_FONT_H
+
+#include <stdint.h>
+
+/* Original five-by-seven bitmap. Lowercase uses the uppercase forms. */
+static const uint8_t glyphs[][7] = {
+    {14,17,17,31,17,17,17}, {30,17,17,30,17,17,30}, {14,17,16,16,16,17,14},
+    {30,17,17,17,17,17,30}, {31,16,16,30,16,16,31}, {31,16,16,30,16,16,16},
+    {14,17,16,23,17,17,15}, {17,17,17,31,17,17,17}, {14,4,4,4,4,4,14},
+    {7,2,2,2,18,18,12}, {17,18,20,24,20,18,17}, {16,16,16,16,16,16,31},
+    {17,27,21,21,17,17,17}, {17,25,21,19,17,17,17}, {14,17,17,17,17,17,14},
+    {30,17,17,30,16,16,16}, {14,17,17,17,21,18,13}, {30,17,17,30,20,18,17},
+    {15,16,16,14,1,1,30}, {31,4,4,4,4,4,4}, {17,17,17,17,17,17,14},
+    {17,17,17,17,17,10,4}, {17,17,17,21,21,27,17}, {17,17,10,4,10,17,17},
+    {17,17,10,4,4,4,4}, {31,1,2,4,8,16,31},
+    {14,17,19,21,25,17,14}, {4,12,4,4,4,4,14}, {14,17,1,2,4,8,31},
+    {30,1,1,14,1,1,30}, {2,6,10,18,31,2,2}, {31,16,16,30,1,1,30},
+    {14,16,16,30,17,17,14}, {31,1,2,4,8,8,8}, {14,17,17,14,17,17,14},
+    {14,17,17,15,1,1,14},
+};
+static const uint8_t blank[7] = {0};
+static const uint8_t period[7] = {0,0,0,0,0,0,4};
+static const uint8_t colon[7] = {0,4,4,0,4,4,0};
+static const uint8_t hyphen[7] = {0,0,0,31,0,0,0};
+static const uint8_t slash[7] = {1,1,2,4,8,16,16};
+static const uint8_t underline[7] = {0,0,0,0,0,0,31};
+static const uint8_t unknown[7] = {14,17,1,2,4,0,4};
+
+static const uint8_t *glyph(unsigned char byte)
+{
+    if (byte >= 'a' && byte <= 'z') byte -= 'a' - 'A';
+    if (byte >= 'A' && byte <= 'Z') return glyphs[byte - 'A'];
+    if (byte >= '0' && byte <= '9') return glyphs[26 + byte - '0'];
+    switch (byte) {
+        case ' ': return blank;
+        case '.': return period;
+        case ':': return colon;
+        case '-': return hyphen;
+        case '/': return slash;
+        case '_': return underline;
+        default: return unknown;
+    }
+}
+
+#endif
