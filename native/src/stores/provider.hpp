@@ -17,6 +17,7 @@ struct ProviderContext
     net::Client *http = nullptr;
     std::string cache_dir; // provider-owned files live in <cache_dir>/<provider id>/
     std::string state_dir; // small persistent state (sequence numbers)
+    std::string asset_dir; // read-only files shipped in the title (the bundled Akeno catalog)
     bool allow_adult = false;
 };
 
@@ -52,6 +53,7 @@ std::unique_ptr<Provider> make_itch_provider();
 std::unique_ptr<Provider> make_gamejolt_provider();
 std::unique_ptr<Provider> make_gog_provider();
 std::unique_ptr<Provider> make_epic_provider();
+std::unique_ptr<Provider> make_akeno_provider();
 
 // Parsers exposed for tests: they take the raw documents a provider downloads.
 namespace parse
@@ -65,6 +67,7 @@ bool github_release(std::string_view release, const std::string &wanted_asset, G
 bool itch_feed(std::string_view rss, bool allow_adult, std::vector<Game> &out, std::string &error);
 bool gamejolt_discover(std::string_view json, bool allow_adult, std::vector<Game> &out, std::string &error);
 bool gog_catalog(std::string_view json, std::vector<Game> &out, std::string &error);
+bool akeno_catalog(std::string_view catalog, std::vector<Game> &out, std::string &error, std::int64_t *revision);
 bool epic_promotions(std::string_view json, std::int64_t now, std::vector<Game> &out, std::string &error);
 } // namespace parse
 

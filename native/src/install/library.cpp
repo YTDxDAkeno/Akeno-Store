@@ -8,6 +8,7 @@
 #include "platform/platform.hpp"
 
 #include <algorithm>
+#include <cctype>
 #include <ctime>
 
 namespace akeno
@@ -83,6 +84,62 @@ std::vector<InstalledTitle> Library::scan(const std::vector<std::string> &roots)
         return lower(a.name) < lower(b.name);
     });
     return titles;
+}
+
+std::string mihawk_drive_c(const std::string &mihawk_root)
+{
+    return fs::join(mihawk_root, "prefixes/mihawk/drive_c");
+}
+
+bool valid_mihawk_profile(const std::string &profile)
+{
+    // MihawkOS accepts folder IDs of letters, digits, '_' and '-' (pw_wine_launch_prefix_id).
+    if (profile.empty() || profile.size() > 64)
+        return false;
+    for (char c : profile)
+        if (!(std::isalnum(static_cast<unsigned char>(c)) || c == '-' || c == '_'))
+            return false;
+    return true;
+}
+
+std::vector<InstalledTitle> Library::scan_mihawk(const std::string &mihawk_root)
+{
+    std::vector<InstalledTitle> games;
+    const std::string catalog = fs::join(mihawk_root, "games");
+    for (const fs::Entry &entry : fs::list(catalog))
+    {
+        if (!entry.directory || !valid_mihawk_profile(entry.name))
+            continue;
+        const auto text = fs::read_file(fs::join(fs::join(catalog, entry.name), "game.json"), 256 * 1024);
+        if (!text)
+            continue;
+        const json::Document doc = json::Document::parse(*text, 256 * 1024);
+        const json::Value root = doc.root();
+        const std::string program = root.str("executable");
+        if (!root.is_object() || program.empty())
+            continue;
+        InstalledTitle game;
+        game.windows = true;
+        game.game = true;
+        game.profile = entry.name;
+        game.program = sanitize_text(program, 260);
+        game.name = sanitize_text(root.str("name", entry.name), 128);
+        game.root = mihawk_root;
+        const json::Value akeno = root["akeno"];
+        if (akeno.is_object())
+        {
+            game.managed = true;
+            game.source_game_id = akeno.str("game");
+            game.content_version = sanitize_text(akeno.str("version"), 60);
+            const std::string folder = akeno.str("folder");
+            if (!folder.empty() && folder.find('/') == std::string::npos && folder.find("..") == std::string::npos)
+                game.folder = fs::join(fs::join(mihawk_drive_c(mihawk_root), "Games"), folder);
+        }
+        games.push_back(std::move(game));
+    }
+    std::sort(games.begin(), games.end(),
+              [](const InstalledTitle &a, const InstalledTitle &b) { return lower(a.name) < lower(b.name); });
+    return games;
 }
 
 void Library::write_receipt(const std::string &title_id, const std::string &game_id, const std::string &version,

@@ -31,6 +31,16 @@ struct TitleFolder
 std::optional<TitleFolder> find_title_folder(const std::string &archive, std::string &error,
                                              const Limits &limits = {});
 
+// Any archive's validated contents. When every entry lies in one top-level folder,
+// `prefix` names it ("Game-1.0/") so extraction can drop that level.
+struct Contents
+{
+    std::string prefix;
+    std::uint64_t bytes = 0;
+    std::size_t files = 0;
+};
+std::optional<Contents> inspect(const std::string &archive, std::string &error, const Limits &limits = {});
+
 using Progress = std::function<bool(std::uint64_t done, std::uint64_t total)>;
 
 // Extracts the entries under `prefix` into `destination` (created). Names are validated

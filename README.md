@@ -13,12 +13,18 @@ einzeln zu portieren.
 | --- | --- |
 | [ProsperoStore](https://prosperostore.net) | Vollständiger, **Ed25519-signierter** Katalog (243 Apps): installieren, aktualisieren, entfernen |
 | [RecompStore](https://www.recompstore.com) | Recompilations und Ports, installiert über GitHub-Releases mit veröffentlichtem SHA-256; „bring your own disc" wird angezeigt |
-| itch.io, Game Jolt | Kostenlose Indie-Spiele; Browserspiele starten in der Web-Runtime (ProsperoWeb) |
+| Akeno-Katalog | 38 kuratierte kostenlose, Online- und Fanspiele (PokeMMO, Pokémon Showdown, PokéRogue, TETR.IO, Luanti, OpenRA, SRB2 …) mit dem echten Weg auf die PS5 und Kompatibilitätsstatus |
+| itch.io, Game Jolt | Kostenlose Indie-Spiele; Browserspiele starten direkt in Parallax Browser (oder ProsperoWeb) |
 | GOG, Epic Games | Kostenlose PC-Spiele und Gratis-Aktionen zum Entdecken; Kauf/Download über das eigene Konto |
 | GitHub | Eigene Repositories mit PS5-Titel-ZIPs |
 
-Status nach Stufen: [STATUS.md](STATUS.md). Kurz: **kompiliert, gelinkt, signiert und paketiert** –
-auf einer echten PS5 noch nicht gestartet.
+Status nach Stufen: [STATUS.md](STATUS.md). Kurz: Akeno **startet auf der PS5** und lädt die Kataloge
+(Nutzertest); Installationen, Starts und die neuen MihawkOS-/Browser-Wege sind auf der Konsole noch
+unbestätigt. Was aus dem Master-Prompt umgesetzt ist und was fehlt:
+[docs/MASTER_PROMPT_COVERAGE.md](docs/MASTER_PROMPT_COVERAGE.md).
+
+Neu in `01.003.000`: Windows-Spiele direkt in MihawkOS installieren, Browserspiele per Startadresse,
+eigene Kompatibilitätsberichte und ein Diagnose-Tab.
 
 ## Schnellstart
 

@@ -34,16 +34,25 @@ was passiert, und bei Problemen `/data/akeno/akeno.log` (und `akeno.prev.log`) p
 | --- | --- | --- | --- |
 | 1 | Akeno aus dem Hauptmenü starten | Startbild, danach Akeno-Oberfläche in 1080p | Start auf PS5 |
 | 2 | Steuerkreuz, Stick, Kreuz, Kreis, L1/R1, Dreieck, Options | Fokus bewegt sich, Tabs wechseln, Suche öffnet die Bildschirmtastatur | DualSense-Navigation |
-| 3 | Oben rechts „x/6 Stores online" abwarten | ProsperoStore, RecompStore, itch.io, Game Jolt, GOG, Epic laden; Cover erscheinen | HTTPS über `sceHttp` auf der Konsole |
+| 3 | Oben rechts „x/7 Stores online" abwarten | ProsperoStore, RecompStore, Akeno-Katalog, itch.io, Game Jolt, GOG, Epic laden; Cover erscheinen | HTTPS über `sceHttp` auf der Konsole (in `01.002.000` bestätigt) |
 | 4 | Einstellungen → Installationsort | „Beschreibbar" | `/data`-Zugriff über ShadowMountPlus |
 | 5 | Kleine App installieren, z. B. „DriftCheck" (126 KB) | Downloads-Tab: Download, Prüfung, Entpacken, Fertig; Kachel erscheint im Hauptmenü | Installation |
 | 6 | DriftCheck im Hauptmenü starten | App startet | installierter Titel lauffähig |
 | 7 | Bibliothek → DriftCheck → Starten (Akeno schließt sich) | DriftCheck startet; `/data/akeno/launch/last.log` zeigt `sceLncUtilLaunchApp = 0x00000000` | Start über ELF-Loader |
 | 8 | Bibliothek → DriftCheck → Deinstallieren | Ordner und Kachel verschwinden (die Kachel kann bis zum Neustart von ShadowMountPlus bleiben) | Deinstallation |
 | 9 | Eigene Datei (z. B. ein selbst gedumptes NES-ROM) nach `/data/akeno/games` kopieren | Bibliothek → „Eigene Spieldateien" erkennt das Format und bietet RetroArch an | Formaterkennung auf der Konsole |
+| 10 | Diagnose → „Netzwerk testen", danach „Bericht speichern" | Jeder Store zeigt OK oder einen Fehlertext; `/data/akeno/diagnose.txt` entsteht | Netzwerk und Diagnose auf der Konsole |
+| 11 | Store → „Im Browser spielbar" → Pokémon Showdown → „Parallax Browser installieren", danach „In Parallax Browser spielen" | Akeno schließt sich, Parallax öffnet play.pokemonshowdown.com | Browserspiel per Startadresse |
+| 12 | Nach Schritt 11 Akeno wieder öffnen | Frage „Wie lief Pokémon Showdown?" → Bewertung speichern; die Detailseite zeigt „Dein Test" | Kompatibilitätsbericht |
+| 13 | Nur wenn MihawkOS eingerichtet ist (einmal gestartet): Store → „Windows (MihawkOS)" → Luanti → „In MihawkOS installieren" | Download mit SHA-256-Prüfung, Ordner `C:\Games\Luanti`, Eintrag „Luanti" in MihawkOS; oder eine klare Meldung, dass das Release keinen SHA-256 hat | Windows-Installation |
+| 14 | Luanti → „In MihawkOS starten" | MihawkOS startet direkt Luanti | Start mit `profile=` |
 
 Für Online-Spiele (z. B. PokeMMO Prospero) gilt zusätzlich: Login, Verbindung zum Server und
 Mehrspieler müssen im jeweiligen Spiel geprüft werden; Akeno belegt nur die Installation.
+
+Schritte 11–14 schreiben in die Datenordner anderer Apps (`/data/ps5webkit/open-url.txt` nur bei
+langen Adressen, `/data/ps5proton/...` bei MihawkOS-Installationen) – jeweils erst nach deiner
+Bestätigung in Akeno.
 
 ## Auf dem Entwicklungsrechner (Linux)
 

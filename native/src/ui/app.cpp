@@ -60,6 +60,7 @@ enum ActionKind
     kStorePage,
     kInstallRuntime,
     kOpenRuntime,
+    kRate,
 };
 
 float approach(float current, float target, float dt, float speed = 12)
@@ -76,7 +77,7 @@ float ease_out_back(float t)
 
 const char *tab_label(int tab)
 {
-    static const char *labels[] = {"Entdecken", "Store", "Bibliothek", "Runtimes", "Downloads", "Einstellungen"};
+    static const char *labels[] = {"Entdecken", "Store", "Bibliothek", "Runtimes", "Downloads", "Diagnose", "Einstellungen"};
     return labels[tab];
 }
 
@@ -105,7 +106,28 @@ Color provider_color(const std::string &provider)
         return {200, 200, 210};
     if (provider == "github")
         return {120, 140, 160};
+    if (provider == "akeno")
+        return {56, 189, 248};
     return theme::accent2;
+}
+
+Color compat_color(Compat compat)
+{
+    switch (compat)
+    {
+    case Compat::Verified:
+        return theme::ok;
+    case Compat::Limited:
+        return {163, 230, 53};
+    case Compat::Experimental:
+    case Compat::Boots:
+        return theme::warn;
+    case Compat::Incompatible:
+        return theme::bad;
+    case Compat::Untested:
+        break;
+    }
+    return theme::muted;
 }
 
 std::string family_label(const std::string &family)
@@ -173,11 +195,13 @@ App::App(Gfx &gfx, std::string asset_dir) : gfx_(gfx), asset_dir_(std::move(asse
     context.http = http_.get();
     context.cache_dir = platform::cache_dir();
     context.state_dir = platform::data_dir();
+    context.asset_dir = asset_dir_;
     context.allow_adult = settings_.adult;
     fs::make_dirs(context.cache_dir);
     std::vector<std::unique_ptr<Provider>> providers;
     providers.push_back(make_prosperostore_provider());
     providers.push_back(make_recompstore_provider());
+    providers.push_back(make_akeno_provider());
     providers.push_back(make_itch_provider());
     providers.push_back(make_gamejolt_provider());
     providers.push_back(make_gog_provider());
@@ -194,17 +218,26 @@ App::App(Gfx &gfx, std::string asset_dir) : gfx_(gfx), asset_dir_(std::move(asse
         return catalog_->resolve(game, error);
     });
     images_ = std::make_unique<ImageCache>(gfx_, *http_, fs::join(platform::cache_dir(), "images"));
+    compat_ = std::make_unique<CompatDb>(fs::join(platform::data_dir(), "compat.json"));
     roots_ = platform::install_roots();
     settings_.root = std::clamp(settings_.root, 0, static_cast<int>(roots_.size()) - 1);
 
-    filters_ = {{"Alle", "all"},
+    filters_ = {{"Alles", "all"},
+                {"Kostenlos", "free"},
+                {"Online & Multiplayer", "online"},
+                {"Singleplayer", "singleplayer"},
+                {"Fanprojekte", "fan"},
+                {"Indie", "indie"},
                 {"PS5-Titel", "ps5"},
                 {"Recomps & Ports", "recomp"},
                 {"Emulatoren", "emulator"},
                 {"Im Browser spielbar", "browser"},
+                {"Windows (MihawkOS)", "windows"},
                 {"Kostenlos für PC", "pc-free"},
                 {"Visual Novels", "vn"},
+                {"Getestet", "tested"},
                 {"Demnächst", "upcoming"},
+                {"Akeno-Katalog", "provider:akeno"},
                 {"ProsperoStore", "provider:prosperostore"},
                 {"RecompStore", "provider:recompstore"},
                 {"itch.io", "provider:itch"},
@@ -219,6 +252,8 @@ App::~App()
 {
     if (resolve_thread_.joinable())
         resolve_thread_.join();
+    if (probe_thread_.joinable())
+        probe_thread_.join();
 }
 
 void App::merge_resolved()
@@ -294,13 +329,35 @@ void App::sync_data()
         for (const auto &root : roots_)
             paths.push_back(root.path);
         installed_ = library_->scan(paths);
+        for (InstalledTitle &game : Library::scan_mihawk(platform::mihawk_root()))
+            installed_.push_back(std::move(game));
         local_ = scan_local_games(platform::import_dirs());
         rebuild_shelves();
     }
 }
 
+int App::game_index_by_id(const std::string &id) const
+{
+    if (id.empty())
+        return -1;
+    for (std::size_t i = 0; i < games_.size(); ++i)
+        if (games_[i].id == id)
+            return static_cast<int>(i);
+    return -1;
+}
+
+int App::game_index_for(const InstalledTitle &title) const
+{
+    if (title.windows)
+        return game_index_by_id(title.source_game_id);
+    const int by_title = game_index_by_title(title.title_id);
+    return by_title >= 0 ? by_title : game_index_by_id(title.source_game_id);
+}
+
 int App::game_index_by_title(const std::string &title_id) const
 {
+    if (title_id.empty())
+        return -1;
     for (std::size_t i = 0; i < games_.size(); ++i)
         if (games_[i].title_id == title_id)
             return static_cast<int>(i);
@@ -309,6 +366,13 @@ int App::game_index_by_title(const std::string &title_id) const
 
 const InstalledTitle *App::installed_for(const Game &game) const
 {
+    if (game.runtime == "windows" && !game.profile.empty())
+    {
+        for (const InstalledTitle &title : installed_)
+            if (title.windows && title.profile == game.profile)
+                return &title;
+        return nullptr;
+    }
     if (game.title_id.empty())
         return nullptr;
     for (const InstalledTitle &title : installed_)
@@ -319,6 +383,9 @@ const InstalledTitle *App::installed_for(const Game &game) const
 
 bool App::update_available(const Game &game, const InstalledTitle &title) const
 {
+    if (title.windows) // a release tag: only known once the entry was resolved
+        return game.resolved && !game.version.empty() && !title.content_version.empty() &&
+               game.version != title.content_version;
     bool comparable = false;
     return compare_content_version(game.content_version, title.content_version, &comparable) > 0 && comparable;
 }
@@ -359,6 +426,20 @@ std::vector<int> App::filter_games(const std::string &key, const std::string &qu
             keep = g.has_tag("visual-novel");
         else if (key == "upcoming")
             keep = g.access == Access::Upcoming;
+        else if (key == "free")
+            keep = g.free && g.access != Access::Upcoming && g.kind == "game";
+        else if (key == "online")
+            keep = g.has_tag("online") || g.has_tag("multiplayer") || g.has_tag("mmo");
+        else if (key == "singleplayer")
+            keep = g.has_tag("singleplayer");
+        else if (key == "fan")
+            keep = g.has_tag("fan");
+        else if (key == "indie")
+            keep = g.has_tag("indie");
+        else if (key == "windows")
+            keep = g.runtime == "windows" && g.access == Access::Install;
+        else if (key == "tested")
+            keep = compat_->find(g.id) != nullptr || g.compat != Compat::Untested;
         else if (starts_with(key, "provider:"))
             keep = g.provider == key.substr(9);
         if (keep && !query.empty())
@@ -407,12 +488,17 @@ void App::rebuild_shelves()
             shelves_.push_back({std::move(title), std::move(subtitle), std::move(items)});
     };
     add("Updates verfügbar", "Neuere Versionen deiner installierten Titel", updates);
+    add("Online & Multiplayer", "Offizielle und Community-Server – nativ, im Browser oder über MihawkOS",
+        take(filter_games("online", ""), 24));
+    add("Fanprojekte", "Von Fans gemachte Spiele und Clients", take(filter_games("fan", ""), 24));
     add("Neu & aktualisiert", "Native PS5-Titel aus dem signierten ProsperoStore-Katalog", take(newest, 24));
     add("Spiele für die PS5", "Ports, Homebrew und Fanprojekte zum direkten Installieren", take(games_only, 24));
     add("Recomps & Ports", "Mit eigenem, rechtmäßig erworbenem Original", take(filter_games("recomp", ""), 24));
     add("Emulatoren & Runtimes", "Gemeinsame Laufzeiten für ganze Plattformen", take(filter_games("emulator", ""), 24));
     add("Im Browser spielbar", "itch.io und Game Jolt – startet in ProsperoWeb", take(filter_games("browser", ""), 24));
     add("Visual Novels", "Erzählspiele von itch.io", take(filter_games("vn", ""), 24));
+    add("Windows-Spiele für MihawkOS", "Freie Spiele mit geprüftem GitHub-Download – landen in C:\\Games",
+        take(filter_games("windows", ""), 24));
     add("Kostenlos für PC", "GOG und Epic Games – über die Windows-Runtimes", take(filter_games("pc-free", ""), 24));
     for (std::size_t i = 0; i < shelves_.size() && i < focus.size(); ++i)
         shelves_[i].focus = std::min(focus[i], static_cast<int>(shelves_[i].items.size()) - 1);
@@ -443,9 +529,32 @@ std::vector<App::Action> App::actions_for(const Game &game) const
 {
     std::vector<Action> actions;
     const InstalledTitle *installed = installed_for(game);
+    const RuntimeInfo *mihawk = nullptr;
     switch (game.access)
     {
     case Access::Install:
+        if (game.runtime == "windows")
+        {
+            // A Windows build for MihawkOS's library: MihawkOS itself must be there.
+            const bool have_mihawk = runtime_installed("windows", &mihawk) && mihawk &&
+                                     std::string(mihawk->title_id) == "PPSA99170";
+            if (installed)
+            {
+                actions.push_back({"In MihawkOS starten", kStart});
+                actions.push_back({update_available(game, *installed) ? "Aktualisieren" : "Neu installieren", kInstall});
+                actions.push_back({"Deinstallieren", kUninstall});
+            }
+            else if (have_mihawk || [&] {
+                         for (const InstalledTitle &t : installed_)
+                             if (t.title_id == "PPSA99170")
+                                 return true;
+                         return false;
+                     }())
+                actions.push_back({"In MihawkOS installieren", kInstall});
+            else
+                actions.push_back({"MihawkOS installieren", kInstallRuntime});
+            break;
+        }
         if (installed)
         {
             actions.push_back({"Starten", kStart});
@@ -462,15 +571,20 @@ std::vector<App::Action> App::actions_for(const Game &game) const
     {
         const RuntimeInfo *web = nullptr;
         if (runtime_installed(game.runtime, &web))
-            actions.push_back({"In ProsperoWeb spielen", kPlayBrowser});
+            actions.push_back({std::string("In ") + web->name + " spielen", kPlayBrowser});
         else
-            actions.push_back({"Web-Runtime installieren", kInstallRuntime});
+            actions.push_back({std::string(runtimes_for(game.runtime).empty() ? "Runtime"
+                                                                             : runtimes_for(game.runtime)[0]->name) +
+                                   " installieren",
+                               kInstallRuntime});
         break;
     }
     case Access::External:
     case Access::Upcoming:
         break;
     }
+    if (game.kind == "game" && (installed || game.access == Access::Runtime || compat_->find(game.id)))
+        actions.push_back({compat_->find(game.id) ? "Testbericht ändern" : "Kompatibilität bewerten", kRate});
     if (!game.page_url.empty())
         actions.push_back({"Store-Seite (QR)", kStorePage});
     if (game.access == Access::External && game.runtime == "windows")
@@ -485,6 +599,23 @@ std::vector<App::Action> App::actions_for(const Game &game) const
 
 void App::install(const Game &game)
 {
+    if (game.runtime == "windows")
+    {
+        // Into MihawkOS's library: say where it goes before anything is downloaded.
+        const Game copy = game;
+        const std::string root = platform::mihawk_root();
+        open_menu("In MihawkOS installieren?",
+                  copy.title + " wird von " + copy.source_repo +
+                      " geladen (nur mit von GitHub veröffentlichtem SHA-256) und nach C:\\Games\\" + copy.folder_name +
+                      " entpackt, also " + fs::join(mihawk_drive_c(root), "Games/" + copy.folder_name) +
+                      ". Der Eintrag erscheint in MihawkOS als \"" + copy.title + "\".",
+                  {{"Installieren", [this, copy, root] {
+                        installer_->install(copy, root);
+                        toast("Zur Warteschlange hinzugefügt", copy.title + " (MihawkOS)");
+                    }},
+                   {"Abbrechen", [] {}}});
+        return;
+    }
     if (roots_.empty() || !roots_[static_cast<std::size_t>(settings_.root)].writable)
     {
         toast("Kein Schreibzugriff",
@@ -495,7 +626,8 @@ void App::install(const Game &game)
     toast("Zur Warteschlange hinzugefügt", game.title);
 }
 
-void App::launch(const std::string &title_id, const std::vector<std::string> &arguments, const std::string &name)
+void App::launch(const std::string &title_id, const std::vector<std::string> &arguments, const std::string &name,
+                 const Game *game, const std::string &runtime)
 {
     std::string error;
     if (!request_launch(title_id, arguments, error))
@@ -503,8 +635,56 @@ void App::launch(const std::string &title_id, const std::vector<std::string> &ar
         toast("Start nicht möglich", error, true);
         return;
     }
+    // A game started from Akeno is asked about the next time Akeno opens (compatibility report).
+    if (game && game->kind == "game")
+        compat_->set_pending({game->id, game->title, runtime, platform::unix_time()});
     toast("Wird gestartet", name + " – Akeno schließt sich");
     quit_ = true; // the payload starts the title once Akeno has closed
+}
+
+void App::launch_windows(const InstalledTitle &title)
+{
+    bool have = false;
+    for (const InstalledTitle &t : installed_)
+        have = have || t.title_id == "PPSA99170";
+    if (!have)
+    {
+        toast("MihawkOS fehlt", "Installiere MihawkOS (PPSA99170) aus dem ProsperoStore", true);
+        return;
+    }
+    const int index = game_index_for(title);
+    launch("PPSA99170", {"profile=" + title.profile}, title.name + " (MihawkOS)",
+           index >= 0 ? &games_[static_cast<std::size_t>(index)] : nullptr, "MihawkOS");
+}
+
+void App::play_web(const Game &game)
+{
+    const RuntimeInfo *web = nullptr;
+    if (!runtime_installed("web", &web) || !web)
+        return;
+    const std::string url = game.launch_url, name = game.title, id = web->title_id, browser = web->name;
+    if (web->args == LaunchArgs::Url)
+    {
+        // Parallax Browser opens a launch argument with "://" as its start page; longer
+        // addresses go through /data/ps5webkit/open-url.txt, which it reads once and deletes.
+        std::vector<std::string> args;
+        if (url.size() <= 200)
+            args.push_back(url);
+        else if (!fs::make_dirs("/data/ps5webkit") || !fs::write_atomic("/data/ps5webkit/open-url.txt", url + "\n"))
+        {
+            toast("Start nicht möglich", "Die Adresse kann nicht an den Browser übergeben werden", true);
+            return;
+        }
+        launch(id, args, name + " (" + browser + ")", &game, browser);
+        return;
+    }
+    const Game copy = game;
+    open_menu("Im Browser spielen",
+              browser + " übernimmt keine Startadresse. Öffne dort " + url +
+                  " – oder installiere Parallax Browser, der die Adresse direkt öffnet.",
+              {{browser + " starten", [this, id, name, browser, copy] { launch(id, {}, browser + " (" + name + ")", &copy, browser); }},
+               {"QR-Code anzeigen", [this, name, url] { open_qr(name, url); }},
+               {"Abbrechen", [] {}}});
 }
 
 void App::run_action(const Game &game, int kind)
@@ -515,13 +695,19 @@ void App::run_action(const Game &game, int kind)
         install(game);
         break;
     case kStart:
-        launch(game.title_id, {}, game.title);
+        if (const InstalledTitle *title = installed_for(game); title && title->windows)
+            launch_windows(*title);
+        else
+            launch(game.title_id, {}, game.title, &game, "PS5-Titel");
         break;
     case kUninstall:
         if (const InstalledTitle *title = installed_for(game))
         {
             const InstalledTitle copy = *title;
-            open_menu("Deinstallieren?", copy.name + " wird mit seinem Ordner entfernt. Spielstände in /download0 bleiben.",
+            open_menu("Deinstallieren?",
+                      copy.windows ? copy.name + " wird aus MihawkOS entfernt (C:\\Games und der Bibliothekseintrag). "
+                                                 "Spielstände unter C:\\users bleiben."
+                                   : copy.name + " wird mit seinem Ordner entfernt. Spielstände in /download0 bleiben.",
                       {{"Deinstallieren", [this, copy] {
                             installer_->uninstall(copy);
                             toast("Wird deinstalliert", copy.name);
@@ -530,22 +716,13 @@ void App::run_action(const Game &game, int kind)
         }
         break;
     case kPlayBrowser:
-    {
-        const RuntimeInfo *web = nullptr;
-        runtime_installed("web", &web);
-        if (!web)
-            break;
-        const std::string url = game.launch_url, name = game.title, id = web->title_id;
-        open_menu("Im Browser spielen",
-                  "ProsperoWeb übernimmt keine Startadresse. Öffne dort " + url +
-                      " – oder scanne den QR-Code und sende die Adresse an dich.",
-                  {{"ProsperoWeb starten", [this, id, name] { launch(id, {}, "ProsperoWeb (" + name + ")"); }},
-                   {"QR-Code anzeigen", [this, name, url] { open_qr(name, url); }},
-                   {"Abbrechen", [] {}}});
+        play_web(game);
         break;
-    }
     case kStorePage:
         open_qr(game.title, game.page_url);
+        break;
+    case kRate:
+        rate_menu(game.id);
         break;
     case kInstallRuntime:
     {
@@ -570,6 +747,114 @@ void App::run_action(const Game &game, int kind)
         break;
     }
     }
+}
+
+// ---------------------------------------------------------------------------------------
+// Compatibility reports
+
+std::string App::compat_line(const Game &game) const
+{
+    if (const CompatReport *report = compat_->find(game.id))
+        return std::string("Dein Test: ") + compat_label(report->status);
+    return compat_label(game.compat);
+}
+
+void App::rate_menu(const std::string &game_id, int focus)
+{
+    const int index = game_index_by_id(game_id);
+    CompatReport report;
+    if (const CompatReport *existing = compat_->find(game_id))
+        report = *existing;
+    else
+    {
+        report.game_id = game_id;
+        if (index >= 0)
+        {
+            const Game &g = games_[static_cast<std::size_t>(index)];
+            report.title = g.title;
+            report.provider = g.provider;
+        }
+    }
+    if (index >= 0)
+    {
+        const Game &g = games_[static_cast<std::size_t>(index)];
+        const InstalledTitle *installed = installed_for(g);
+        report.game_version = installed && !installed->content_version.empty() ? installed->content_version : g.version;
+        const RuntimeInfo *runtime = nullptr;
+        if (g.runtime == "native")
+            report.runtime = "PS5-Titel";
+        else if (runtime_installed(g.runtime, &runtime) && runtime)
+            report.runtime = runtime->name;
+        if (runtime)
+            for (const InstalledTitle &t : installed_)
+                if (t.title_id == runtime->title_id)
+                    report.runtime_version = t.content_version;
+    }
+    report.firmware = platform::firmware_version();
+    const std::string title = report.title.empty() ? game_id : report.title;
+    std::vector<MenuItem> items;
+    for (Compat status : {Compat::Verified, Compat::Limited, Compat::Boots, Compat::Experimental, Compat::Incompatible})
+        items.push_back({std::string(report.status == status ? "● " : "○ ") + compat_label(status),
+                         [this, report, status, game_id] {
+                             CompatReport r = report;
+                             r.status = status;
+                             r.tested = platform::unix_time();
+                             if (status == Compat::Verified || status == Compat::Limited || status == Compat::Boots)
+                                 r.start = r.start == Aspect::Unknown ? Aspect::Works : r.start;
+                             if (status == Compat::Incompatible && r.start == Aspect::Unknown)
+                                 r.start = Aspect::Fails;
+                             if (status == Compat::Verified && r.gameplay == Aspect::Unknown)
+                                 r.gameplay = Aspect::Works;
+                             compat_->put(r);
+                             rebuild_store();
+                             rate_menu(game_id, 6);
+                         }});
+    const auto aspect = [&](const char *label, Aspect CompatReport::*field) {
+        items.push_back({std::string(label) + ": " + aspect_label(report.*field), [this, report, field, game_id,
+                                                                                     at = static_cast<int>(items.size())] {
+                             CompatReport r = report;
+                             r.*field = next_aspect(r.*field);
+                             r.tested = platform::unix_time();
+                             compat_->put(r);
+                             rate_menu(game_id, at);
+                         }});
+    };
+    aspect("Start", &CompatReport::start);
+    aspect("Gameplay", &CompatReport::gameplay);
+    aspect("Grafik", &CompatReport::graphics);
+    aspect("Ton", &CompatReport::audio);
+    aspect("Controller", &CompatReport::controller);
+    aspect("Netzwerk / Online", &CompatReport::network);
+    if (compat_->find(game_id))
+        items.push_back({"Testbericht löschen", [this, game_id, title] {
+                             compat_->remove(game_id);
+                             rebuild_store();
+                             toast("Testbericht gelöscht", title);
+                         }});
+    items.push_back({"Fertig", [] {}});
+    open_menu("Kompatibilität: " + title,
+              "Was hast du auf dieser PS5 gesehen? Der Bericht bleibt lokal (/data/akeno/compat.json) und lässt sich "
+              "unter Diagnose exportieren." +
+                  (report.firmware.empty() ? std::string() : "\nFirmware " + report.firmware) +
+                  (report.runtime.empty() ? std::string() : " · " + report.runtime + " " + report.runtime_version),
+              std::move(items));
+    menu_focus_ = std::clamp(focus, 0, static_cast<int>(menu_.size()) - 1);
+}
+
+void App::ask_pending_report()
+{
+    const auto pending = compat_->pending();
+    if (!pending)
+        return;
+    compat_->clear_pending();
+    // Only ask about a start from the last three days.
+    if (platform::unix_time() - pending->started > 3 * 24 * 3600)
+        return;
+    const PendingLaunch p = *pending;
+    open_menu("Wie lief " + p.title + "?",
+              "Du hast es zuletzt aus Akeno gestartet" + (p.runtime.empty() ? std::string() : " (" + p.runtime + ")") +
+                  ". Ein kurzer Bericht hilft dir und anderen, den Status ehrlich zu halten. Nichts wird gesendet.",
+              {{"Jetzt bewerten", [this, id = p.game_id] { rate_menu(id); }}, {"Nicht jetzt", [] {}}});
 }
 
 void App::toast(const std::string &title, const std::string &text, bool error)
@@ -644,23 +929,39 @@ void App::title_menu(const InstalledTitle &title)
 {
     std::vector<MenuItem> items;
     const InstalledTitle copy = title;
-    items.push_back({"Starten", [this, copy] { launch(copy.title_id, {}, copy.name); }});
-    const int index = game_index_by_title(title.title_id);
+    if (title.windows)
+        items.push_back({"In MihawkOS starten", [this, copy] { launch_windows(copy); }});
+    else
+        items.push_back({"Starten", [this, copy] {
+                             const int index = game_index_for(copy);
+                             launch(copy.title_id, {}, copy.name,
+                                    index >= 0 ? &games_[static_cast<std::size_t>(index)] : nullptr, "PS5-Titel");
+                         }});
+    const int index = game_index_for(title);
     if (index >= 0)
     {
         const Game game = games_[static_cast<std::size_t>(index)];
         if (update_available(game, title))
-            items.push_back({"Aktualisieren auf " + game.content_version, [this, game] { install(game); }});
+            items.push_back({"Aktualisieren auf " + (title.windows ? game.version : game.content_version),
+                             [this, game] { install(game); }});
         items.push_back({"Details im Store", [this, index] { open_detail(index); }});
+        if (game.kind == "game")
+            items.push_back({"Kompatibilität bewerten", [this, id = game.id] { rate_menu(id); }});
     }
-    if (title.shortcut || title.managed || index >= 0)
+    if (title.windows ? title.managed : (title.shortcut || title.managed || index >= 0))
         items.push_back({"Deinstallieren", [this, copy] {
                              installer_->uninstall(copy);
                              toast("Wird deinstalliert", copy.name);
                          }});
     items.push_back({"Abbrechen", [] {}});
-    std::string text = title.title_id + " · Version " + (title.content_version.empty() ? "?" : title.content_version) +
-                       "\n" + title.folder + (title.managed ? "\nVon Akeno installiert" : "\nManuell installiert");
+    std::string text;
+    if (title.windows)
+        text = "Windows-Spiel in MihawkOS · " + title.program + "\nEintrag /data/ps5proton/games/" + title.profile +
+               (title.managed ? "\nVon Akeno installiert" + (title.content_version.empty() ? std::string() : " · " + title.content_version)
+                              : "\nIn MihawkOS angelegt (Akeno startet es nur)");
+    else
+        text = title.title_id + " · Version " + (title.content_version.empty() ? "?" : title.content_version) + "\n" +
+               title.folder + (title.managed ? "\nVon Akeno installiert" : "\nManuell installiert");
     open_menu(title.name, text, std::move(items));
 }
 
@@ -777,6 +1078,8 @@ void App::press(Button button)
         return press_runtimes(button);
     case Tab::Downloads:
         return press_downloads(button);
+    case Tab::Diagnose:
+        return press_diagnose(button);
     case Tab::Settings:
         return press_settings(button);
     case Tab::Count:
@@ -1293,6 +1596,12 @@ void App::update(float dt)
     library_scroll_ = approach(library_scroll_, library_target, dt, 12);
     runtime_scroll_ = approach(runtime_scroll_, std::max(0.0f, runtime_focus_ * 104.0f - 520), dt, 12);
     settings_scroll_ = approach(settings_scroll_, std::max(0.0f, settings_focus_ * 92.0f - 540), dt, 12);
+    diagnose_scroll_ = approach(diagnose_scroll_, diagnose_target_, dt, 12);
+    if (!pending_asked_ && menu_.empty() && time_ > 1.5f)
+    {
+        pending_asked_ = true;
+        ask_pending_report();
+    }
     for (Toast &t : toasts_)
         t.age += dt;
     while (!toasts_.empty() && toasts_.front().age > 5)
@@ -1305,7 +1614,9 @@ void App::update(float dt)
             announced[job.id] = job.state;
             if (job.state == JobState::Done)
                 toast(job.kind == JobKind::Install ? "Installiert" : "Entfernt",
-                      job.title + (job.kind == JobKind::Install ? " – ShadowMountPlus registriert den Titel gleich" : ""));
+                      job.title + (job.kind != JobKind::Install ? ""
+                                   : job.windows               ? " – steht jetzt in der MihawkOS-Bibliothek"
+                                                               : " – ShadowMountPlus registriert den Titel gleich"));
             else if (job.state == JobState::Failed)
                 toast("Fehlgeschlagen: " + job.title, job.error, true);
         }
@@ -1351,6 +1662,15 @@ float App::draw_glyph(Button button, float x, float y, float size)
         line(cx + k, cy + k * 0.75f, cx - k, cy + k * 0.75f, w, color);
         line(cx - k, cy + k * 0.75f, cx, cy - k, w, color);
         break;
+    case Button::Up:
+    case Button::Down:
+        // The d-pad's up/down pair: two chevrons.
+        color = theme::text;
+        line(cx - k * 0.7f, cy - k * 0.25f, cx, cy - k, w, color);
+        line(cx, cy - k, cx + k * 0.7f, cy - k * 0.25f, w, color);
+        line(cx - k * 0.7f, cy + k * 0.25f, cx, cy + k, w, color);
+        line(cx, cy + k, cx + k * 0.7f, cy + k * 0.25f, w, color);
+        break;
     case Button::Options:
         for (int i = -1; i <= 1; ++i)
             gfx_.rounded({cx - k, cy + i * k * 0.6f - w / 2, 2 * k, w}, w / 2, theme::text);
@@ -1379,8 +1699,23 @@ void App::draw_button(const std::string &label, const Rect &rect, bool focused, 
     if (primary || focused)
     {
         gfx_.rounded(rect, rect.h / 2, focused ? theme::accent : theme::accent.with_alpha(0.75f));
-        gfx_.gradient_h({rect.x + rect.h / 2, rect.y, rect.w - rect.h, rect.h},
-                        theme::accent.with_alpha(0), theme::accent2.with_alpha(focused ? 0.65f : 0.35f));
+        const float a = focused ? 0.65f : 0.35f;
+        gfx_.gradient_h({rect.x + rect.h / 2, rect.y, rect.w - rect.h, rect.h}, theme::accent.with_alpha(0),
+                        theme::accent2.with_alpha(a));
+        // The right cap gets the gradient's end layer over the same base, so the pill has no seam.
+        const Color end = theme::accent2.with_alpha(a);
+        // Clip to the cap's right half, inside any clip that is already set, and restore it after.
+        SDL_Renderer *renderer = gfx_.renderer();
+        SDL_Rect previous{};
+        const bool clipped = SDL_RenderIsClipEnabled(renderer);
+        SDL_RenderGetClipRect(renderer, &previous);
+        SDL_Rect cap = Rect{rect.x + rect.w - rect.h / 2, rect.y, rect.h / 2, rect.h}.sdl();
+        if (!clipped || SDL_IntersectRect(&previous, &cap, &cap))
+        {
+            SDL_RenderSetClipRect(renderer, &cap);
+            gfx_.rounded({rect.x + rect.w - rect.h, rect.y, rect.h, rect.h}, rect.h / 2, end);
+        }
+        SDL_RenderSetClipRect(renderer, clipped ? &previous : nullptr);
     }
     else
         gfx_.rounded(rect, rect.h / 2, {255, 255, 255, 26});
@@ -1458,7 +1793,7 @@ void App::draw_top_bar()
     for (int i = 0; i < static_cast<int>(Tab::Count); ++i)
     {
         const bool active = static_cast<int>(tab_) == i;
-        const float w = gfx_.measure(tab_label(i), 25, Weight::Bold);
+        const float w = gfx_.measure(tab_label(i), 24, Weight::Bold);
         if (active)
         {
             active_x = x;
@@ -1466,8 +1801,8 @@ void App::draw_top_bar()
             if (in_tabs_)
                 gfx_.glow({x - 18, 40, w + 36, 48}, 24, theme::glow.with_alpha(0.25f), 10);
         }
-        gfx_.text(tab_label(i), x, 50, 25, active ? theme::text : theme::muted, Weight::Bold);
-        x += w + 54;
+        gfx_.text(tab_label(i), x, 51, 24, active ? theme::text : theme::muted, Weight::Bold);
+        x += w + 46;
     }
     if (tab_line_w_ == 0)
     {
@@ -1488,7 +1823,7 @@ void App::draw_top_bar()
     std::tm local{};
     localtime_r(&now, &local);
     std::snprintf(clock, sizeof clock, "%02d:%02d", local.tm_hour, local.tm_min);
-    gfx_.text(clock, kWidth - kMargin, 44, 30, theme::text, Weight::Bold, Align::Right);
+    gfx_.text(clock, kWidth - kMargin, 34, 30, theme::text, Weight::Bold, Align::Right);
     std::string state;
     if (catalog_->refreshing())
         state = "Kataloge werden geladen …";
@@ -1504,14 +1839,14 @@ void App::draw_top_bar()
         state = std::to_string(ready) + "/" + std::to_string(total) + " Stores online · " +
                 std::to_string(games_.size()) + " Titel";
     }
-    gfx_.text(state, kWidth - kMargin - 112, 52, 19, theme::dim, Weight::Regular, Align::Right);
+    gfx_.text(state, kWidth - kMargin, 76, 17, theme::dim, Weight::Regular, Align::Right);
     if (catalog_->refreshing())
     {
         const float a = time_ * 6;
         for (int i = 0; i < 8; ++i)
         {
             const float t = a + i * 0.785f;
-            gfx_.circle(kWidth - kMargin - 112 - gfx_.measure(state, 19) - 26 + 9 * std::cos(t), 64 + 9 * std::sin(t),
+            gfx_.circle(kWidth - kMargin - gfx_.measure(state, 17) - 22 + 8 * std::cos(t), 86 + 8 * std::sin(t),
                         2.2f, theme::accent2.with_alpha(i / 8.0f));
         }
     }
@@ -1538,6 +1873,8 @@ void App::draw_hints()
             hints = {{Button::Cross, "Abbrechen"}, {Button::Square, "Erledigte entfernen"}, {Button::Circle, "Zurück"}};
         if (tab_ == Tab::Settings)
             hints = {{Button::Cross, "Ändern"}, {Button::Circle, "Zurück"}};
+        if (tab_ == Tab::Diagnose)
+            hints = {{Button::Cross, "Ausführen"}, {Button::Up, "Blättern"}, {Button::Circle, "Zurück"}};
         hints.push_back({Button::Options, "Einstellungen"});
     }
     gfx_.bottom_shade();
@@ -1659,10 +1996,15 @@ void App::draw_discover()
 
 void App::draw_store()
 {
-    // Filters.
-    float y = kTop + 8;
-    for (std::size_t i = 0; i < filters_.size(); ++i, y += 56)
+    // Filters (the list scrolls once the focused one would leave the screen).
+    const float filter_scroll = std::max(0.0f, filter_ * 52.0f - 600.0f);
+    const Rect filter_clip{0, kTop, 400, kHeight - kTop - 96};
+    gfx_.set_clip(&filter_clip);
+    float y = kTop + 8 - filter_scroll;
+    for (std::size_t i = 0; i < filters_.size(); ++i, y += 52)
     {
+        if (y + 48 < kTop || y > kHeight - 96)
+            continue;
         const bool selected = static_cast<int>(i) == filter_;
         const bool focused = selected && filter_focus_ && !in_tabs_;
         const Rect r{kMargin, y, 300, 48};
@@ -1676,6 +2018,7 @@ void App::draw_store()
         gfx_.text(filters_[i].label, r.x + 24, r.y + 11, 21, selected ? theme::text : theme::dim,
                   selected ? Weight::Bold : Weight::Regular);
     }
+    gfx_.set_clip(nullptr);
     // Search field.
     const Rect search{410, kTop + 4, kWidth - 410 - kMargin, 60};
     gfx_.rounded(search, 30, keyboard_ ? theme::panel_hi : theme::panel);
@@ -1720,8 +2063,12 @@ void App::draw_library()
     float y = kTop + 6 - library_scroll_;
     gfx_.text("Installierte Titel", kMargin, y, 32, theme::text, Weight::Bold);
     const std::string where = roots_.empty() ? "" : roots_[static_cast<std::size_t>(settings_.root)].path;
-    gfx_.text(std::to_string(installed_.size()) + " Titel in den ShadowMountPlus-Ordnern", kMargin + 330, y + 10, 20,
-              theme::muted);
+    int windows_games = 0;
+    for (const InstalledTitle &t : installed_)
+        windows_games += t.windows;
+    gfx_.text(std::to_string(installed_.size() - windows_games) + " Titel in den ShadowMountPlus-Ordnern" +
+                  (windows_games ? " · " + std::to_string(windows_games) + " Windows-Spiele in MihawkOS" : std::string()),
+              kMargin + 330, y + 10, 20, theme::muted);
     y += 64;
     const int titles = static_cast<int>(installed_.size());
     if (titles == 0)
@@ -1744,7 +2091,7 @@ void App::draw_library()
         const Rect r{x + (kLibraryTile - s) / 2, ty + (kLibraryTile - s) / 2, s, s};
         if (focused)
             gfx_.glow(r, 22, theme::glow.with_alpha(0.45f), 20);
-        const int index = game_index_by_title(t.title_id);
+        const int index = game_index_for(t);
         const std::string art = !t.icon_path.empty() ? t.icon_path
                                 : index >= 0        ? artwork(games_[static_cast<std::size_t>(index)])
                                                     : "";
@@ -1759,12 +2106,15 @@ void App::draw_library()
             draw_badge("Update", r.x + 10, r.y + 10, theme::warn, {40, 25, 0});
         else if (t.shortcut)
             draw_badge("Verknüpfung", r.x + 10, r.y + 10, {0, 0, 0, 170}, theme::text);
+        else if (t.windows)
+            draw_badge("Windows", r.x + 10, r.y + 10, {0, 0, 0, 170}, theme::text);
         if (focused)
             gfx_.rounded_outline(r, 22, 3, {255, 255, 255, 200});
         gfx_.text(t.name, x + 2, ty + kLibraryTile + 14, 20, focused ? theme::text : theme::dim, Weight::Bold,
                   Align::Left, kLibraryTile);
-        gfx_.text(t.title_id + " · " + (t.content_version.empty() ? "?" : t.content_version), x + 2,
-                  ty + kLibraryTile + 40, 16, theme::muted, Weight::Regular, Align::Left, kLibraryTile);
+        gfx_.text(t.windows ? "MihawkOS" + (t.content_version.empty() ? std::string() : " · " + t.content_version)
+                            : t.title_id + " · " + (t.content_version.empty() ? "?" : t.content_version),
+                  x + 2, ty + kLibraryTile + 40, 16, theme::muted, Weight::Regular, Align::Left, kLibraryTile);
     }
     y += ((titles + kLibraryColumns - 1) / kLibraryColumns) * 270.0f + 20;
     gfx_.text("Eigene Spieldateien", kMargin, y, 32, theme::text, Weight::Bold);
@@ -1956,7 +2306,7 @@ void App::draw_settings()
     gfx_.text("Über Akeno", about.x + 28, ay, 26, theme::text, Weight::Bold);
     ay += 48;
     const std::vector<std::pair<std::string, std::string>> facts = {
-        {"Version", "01.002.000 (Alpha)"},
+        {"Version", AKENO_VERSION " (Alpha)"},
         {"Plattform", platform::name()},
         {"Netzwerk", http_->transport_name()},
         {"Daten", platform::data_dir()},
@@ -2032,10 +2382,23 @@ void App::draw_detail()
         facts.push_back({"Kategorie", g.category});
     if (!g.license.empty())
         facts.push_back({"Lizenz", g.license});
-    facts.push_back({"Runtime", g.runtime == "native" ? "Nativer PS5-Titel"
-                                : g.runtime == "web"  ? "Web (ProsperoWeb)"
-                                : g.runtime == "windows" ? "Windows (MihawkOS/PC5)"
+    if (!g.genres.empty())
+    {
+        std::string genres;
+        for (std::size_t i = 0; i < g.genres.size() && i < 3; ++i)
+            genres += (i ? ", " : "") + g.genres[i];
+        facts.push_back({"Genre", genres});
+    }
+    if (!g.age.empty())
+        facts.push_back({"Alter", g.age});
+    facts.push_back({"Runtime", g.runtime == "native"    ? "Nativer PS5-Titel"
+                                : g.runtime == "web"     ? "Web (Parallax Browser / ProsperoWeb)"
+                                : g.runtime == "windows" ? (g.access == Access::Install ? "Windows (MihawkOS)" : "Windows")
+                                : g.runtime == "java"    ? "Java"
+                                : g.runtime == "linux"   ? "Linux"
                                                          : "PC"});
+    if (facts.size() > 6)
+        facts.resize(6);
     float fx = x;
     for (const auto &[k, v] : facts)
     {
@@ -2047,10 +2410,41 @@ void App::draw_detail()
     if (const InstalledTitle *installed = installed_for(g))
     {
         const bool update = update_available(g, *installed);
-        gfx_.text(update ? "Installiert: " + installed->content_version + "  →  verfügbar: " + g.content_version
-                         : "Installiert in " + installed->folder,
+        gfx_.text(update ? "Installiert: " + installed->content_version + "  →  verfügbar: " +
+                               (installed->windows ? g.version : g.content_version)
+                  : installed->windows ? "In MihawkOS installiert: " + installed->program
+                                       : "Installiert in " + installed->folder,
                   x, y, 20, update ? theme::warn : theme::ok, Weight::Bold);
         y += 36;
+    }
+    // Compatibility, online and controller facts (master prompt sections 11, 14 and 19).
+    {
+        const CompatReport *report = compat_->find(g.id);
+        const Compat shown = report ? report->status : g.compat;
+        const std::string label = std::string(report ? "Dein Test: " : "Kompatibilität: ") + compat_label(shown);
+        draw_badge(label, x, y, compat_color(shown).with_alpha(0.9f), {10, 12, 24});
+        float lx = x + gfx_.measure(label, 17, Weight::Bold) + 50;
+        std::string note = report ? std::string("Start ") + aspect_label(report->start) + " · Gameplay " +
+                                        aspect_label(report->gameplay) + " · Grafik " + aspect_label(report->graphics) +
+                                        " · Ton " + aspect_label(report->audio) + " · Controller " +
+                                        aspect_label(report->controller) + " · Online " + aspect_label(report->network)
+                                  : g.compat_note;
+        float note_h = 0;
+        if (!note.empty())
+            note_h = gfx_.paragraph(note, {lx, y + 1, kWidth - lx - kMargin, 60}, 18, theme::dim, 2);
+        y += std::max(44.0f, note_h + 16);
+        std::string online;
+        if (!g.online.empty())
+            online += "Online: " + g.online;
+        if (!g.crossplay.empty())
+            online += (online.empty() ? "" : "   ·   ") + std::string("Crossplay: ") + g.crossplay;
+        if (!g.controller.empty())
+            online += (online.empty() ? "" : "   ·   ") + std::string("Steuerung: ") + g.controller;
+        if (!online.empty())
+        {
+            gfx_.text(online, x, y, 19, theme::text.with_alpha(0.85f), Weight::Regular, Align::Left, kWidth - x - kMargin);
+            y += 36;
+        }
     }
     if (!g.needs.empty())
     {
@@ -2101,6 +2495,268 @@ void App::draw_detail()
                    : g.access == Access::Install ? "Der Download wird gegen den von GitHub veröffentlichten SHA-256 geprüft."
                                                  : "",
                    {110, offset + 580, 400, 80}, 17, theme::muted, 3);
+}
+
+// ---------------------------------------------------------------------------------------
+// Diagnose (master prompt section 4, "Akeno Diagnostics")
+
+namespace
+{
+const char *kDiagnoseActions[] = {"Netzwerk testen", "Bericht speichern", "Kompatibilität exportieren",
+                                  "Kompatibilität importieren"};
+}
+
+void App::start_network_test()
+{
+    if (probing_.exchange(true))
+        return;
+    if (probe_thread_.joinable())
+        probe_thread_.join();
+    {
+        std::lock_guard lock(probe_mutex_);
+        probes_ = {{"ProsperoStore", "https://prosperostore.net/api/v1/manifest.json"},
+                   {"GitHub API", "https://api.github.com/rate_limit"},
+                   {"GitHub (Akeno-Katalog)", "https://raw.githubusercontent.com/YTDxDAkeno/Akeno-Store/main/README.md"},
+                   {"RecompStore", "https://www.recompstore.com/catalog.json"},
+                   {"itch.io", "https://itch.io/games/free.xml"},
+                   {"Game Jolt", "https://gamejolt.com/site-api/web/discover/games?section=hot"},
+                   {"GOG", "https://catalog.gog.com/v1/catalog?limit=1"},
+                   {"Epic Games", "https://store-site-backend-static.ak.epicgames.com/freeGamesPromotions?locale=de"}};
+        for (Probe &probe : probes_)
+            probe.result = "wartet …";
+    }
+    probe_thread_ = std::thread([this] {
+        std::size_t count = 0;
+        {
+            std::lock_guard lock(probe_mutex_);
+            count = probes_.size();
+        }
+        for (std::size_t i = 0; i < count; ++i)
+        {
+            std::string url;
+            {
+                std::lock_guard lock(probe_mutex_);
+                url = probes_[i].url;
+                probes_[i].result = "läuft …";
+            }
+            const std::uint64_t started = platform::monotonic_ms();
+            const net::Response response = http_->get(url, 32 * 1024 * 1024);
+            const int ms = static_cast<int>(platform::monotonic_ms() - started);
+            std::lock_guard lock(probe_mutex_);
+            Probe &probe = probes_[i];
+            probe.ms = ms;
+            probe.ok = response.error.empty() && response.status >= 200 && response.status < 400;
+            probe.result = !response.error.empty() ? response.error
+                                                   : "HTTP " + std::to_string(response.status) + " · " +
+                                                         format_bytes(response.bytes) + " · " + std::to_string(ms) + " ms";
+            platform::log("[diagnose] %s: %s", probe.name.c_str(), probe.result.c_str());
+        }
+        probing_ = false;
+    });
+}
+
+std::vector<std::string> App::diagnose_lines() const
+{
+    std::vector<std::string> lines;
+    const auto yes = [](bool value) { return std::string(value ? "ja" : "nein"); };
+    lines.push_back("# System");
+    const std::string firmware = platform::firmware_version();
+    lines.push_back(std::string("Plattform: ") + platform::name() +
+                    (firmware.empty() ? "" : " · Systemsoftware " + firmware) + " · Akeno " AKENO_VERSION);
+    lines.push_back(std::string("HTTPS: ") + http_->transport_name() + " · " + net::Client::user_agent());
+    lines.push_back("Datenordner: " + platform::data_dir() + " (beschreibbar: " + yes(fs::writable(platform::data_dir())) +
+                    ")");
+    if (platform::is_console())
+        lines.push_back("/data in der App eingebunden (ShadowMountPlus 1.7+): " + yes(fs::writable("/data")));
+    lines.push_back("# Speicher");
+    for (const auto &root : roots_)
+    {
+        const auto space = fs::free_space(root.path);
+        lines.push_back(root.label + ": " + (root.writable ? "beschreibbar" : "nicht beschreibbar") +
+                        (space ? " · " + format_bytes(*space) + " frei" : std::string()));
+    }
+    lines.push_back("# Runtimes");
+    int found = 0;
+    for (const RuntimeInfo &info : runtime_registry())
+        for (const InstalledTitle &title : installed_)
+            if (title.title_id == info.title_id)
+            {
+                lines.push_back(std::string(info.name) + " (" + info.title_id + ") " + title.content_version + " · " +
+                                family_label(info.key));
+                ++found;
+            }
+    if (!found)
+        lines.push_back("Keine Runtime-Titel installiert");
+    const std::string drive_c = mihawk_drive_c(platform::mihawk_root());
+    int windows_games = 0, akeno_games = 0;
+    for (const InstalledTitle &title : installed_)
+        if (title.windows)
+        {
+            ++windows_games;
+            akeno_games += title.managed;
+        }
+    lines.push_back("MihawkOS-Laufwerk C: vorhanden: " + yes(fs::is_dir(drive_c)) + " (" + drive_c + ")");
+    lines.push_back("MihawkOS-Bibliothek: " + std::to_string(windows_games) + " Spiele, davon " +
+                    std::to_string(akeno_games) + " mit Akeno installiert");
+    lines.push_back("# Letzter Start über den ELF-Loader");
+    const auto last = fs::read_file(fs::join(platform::data_dir(), "launch/last.log"), 16 * 1024);
+    if (last && !last->empty())
+        for (const std::string &line : split(*last, '\n'))
+        {
+            if (!line.empty())
+                lines.push_back(sanitize_text(line, 200));
+        }
+    else
+        lines.push_back("Noch kein Start protokolliert (launch/last.log)");
+    lines.push_back("# Stores");
+    for (const ProviderStatus &p : providers_)
+    {
+        const char *state = !p.enabled                                     ? "deaktiviert"
+                            : p.state == ProviderStatus::State::Ready     ? "bereit"
+                            : p.state == ProviderStatus::State::Offline   ? "offline (Cache)"
+                            : p.state == ProviderStatus::State::Loading   ? "lädt"
+                            : p.state == ProviderStatus::State::Failed    ? "Fehler"
+                                                                           : "inaktiv";
+        lines.push_back(p.label + ": " + state + " · " + std::to_string(p.count) + " Einträge" +
+                        (p.message.empty() ? std::string() : " · " + p.message));
+    }
+    lines.push_back("# Netzwerktest");
+    {
+        std::lock_guard lock(const_cast<std::mutex &>(probe_mutex_));
+        if (probes_.empty())
+            lines.push_back("Noch nicht ausgeführt – „Netzwerk testen“ wählen");
+        for (const Probe &probe : probes_)
+            lines.push_back(std::string(probe.ok ? "OK  " : probe.ms < 0 ? "…   " : "FEHLER  ") + probe.name + ": " +
+                            probe.result);
+    }
+    lines.push_back("# Kompatibilitätsberichte");
+    lines.push_back(std::to_string(compat_->all().size()) + " eigene Berichte in " +
+                    fs::join(platform::data_dir(), "compat.json"));
+    lines.push_back("# Protokoll (neueste zuletzt)");
+    for (const std::string &line : platform::recent_log(16))
+        lines.push_back(sanitize_text(line, 220));
+    return lines;
+}
+
+std::string App::diagnose_report() const
+{
+    std::string text = "Akeno Gaming Hub – Diagnosebericht\n";
+    const std::time_t now = std::time(nullptr);
+    char stamp[32];
+    std::strftime(stamp, sizeof stamp, "%Y-%m-%d %H:%M:%S", std::localtime(&now));
+    text += std::string("Erstellt: ") + stamp + "\n";
+    for (const std::string &line : diagnose_lines())
+        text += (starts_with(line, "# ") ? "\n== " + line.substr(2) + " ==" : line) + "\n";
+    text += "\n== Vollständiges Protokoll ==\n";
+    for (const std::string &line : platform::recent_log(300))
+        text += line + (ends_with(line, "\n") ? "" : "\n");
+    return text;
+}
+
+void App::press_diagnose(Button button)
+{
+    const int actions = static_cast<int>(std::size(kDiagnoseActions));
+    switch (button)
+    {
+    case Button::Left:
+        diagnose_focus_ = std::max(0, diagnose_focus_ - 1);
+        break;
+    case Button::Right:
+        diagnose_focus_ = std::min(actions - 1, diagnose_focus_ + 1);
+        break;
+    case Button::Up:
+        if (diagnose_target_ <= 0)
+            in_tabs_ = true;
+        diagnose_target_ = std::max(0.0f, diagnose_target_ - 240);
+        break;
+    case Button::Down:
+        diagnose_target_ = std::min(diagnose_target_ + 240, 4000.0f);
+        break;
+    case Button::Circle:
+        in_tabs_ = true;
+        break;
+    case Button::Cross:
+    {
+        const std::string data = platform::data_dir();
+        if (diagnose_focus_ == 0)
+        {
+            start_network_test();
+            toast("Netzwerktest", "Die Stores werden nacheinander abgefragt");
+        }
+        else if (diagnose_focus_ == 1)
+        {
+            const std::string path = fs::join(data, "diagnose.txt");
+            if (fs::write_atomic(path, diagnose_report()))
+                toast("Bericht gespeichert", path + " – per FTP abholen und weitergeben");
+            else
+                toast("Bericht nicht gespeichert", path + " ist nicht beschreibbar", true);
+        }
+        else if (diagnose_focus_ == 2)
+        {
+            const std::string path = fs::join(data, "compat-export.json");
+            if (fs::write_atomic(path, compat_->export_json()))
+                toast("Exportiert", std::to_string(compat_->all().size()) + " Berichte nach " + path);
+            else
+                toast("Export fehlgeschlagen", path, true);
+        }
+        else
+        {
+            const std::string path = fs::join(data, "compat-import.json");
+            const auto text = fs::read_file(path, 8 * 1024 * 1024);
+            std::string error;
+            const int merged = text ? compat_->import_json(*text, error) : -1;
+            if (!text)
+                toast("Keine Importdatei", "Lege die Datei als " + path + " ab", true);
+            else if (merged < 0)
+                toast("Import fehlgeschlagen", error, true);
+            else
+            {
+                toast("Importiert", std::to_string(merged) + " neue oder neuere Berichte übernommen");
+                rebuild_store();
+            }
+        }
+        break;
+    }
+    default:
+        break;
+    }
+}
+
+void App::draw_diagnose()
+{
+    // Actions.
+    float bx = kMargin;
+    for (int i = 0; i < static_cast<int>(std::size(kDiagnoseActions)); ++i)
+    {
+        const float w = gfx_.measure(kDiagnoseActions[i], 22, Weight::Bold) + 64;
+        draw_button(kDiagnoseActions[i], {bx, kTop + 6, w, 58}, !in_tabs_ && diagnose_focus_ == i, i == 0);
+        bx += w + 18;
+    }
+    if (probing_)
+        gfx_.text("Netzwerktest läuft …", bx + 12, kTop + 22, 20, theme::accent2, Weight::Bold);
+    // Lines.
+    const Rect clip{0, kTop + 84, kWidth, kHeight - kTop - 84 - 96};
+    gfx_.set_clip(&clip);
+    float y = kTop + 100 - diagnose_scroll_;
+    const Rect panel{kMargin, y, kWidth - 2 * kMargin, 0};
+    for (const std::string &line : diagnose_lines())
+    {
+        if (starts_with(line, "# "))
+        {
+            y += 14;
+            if (y > clip.y - 50 && y < kHeight)
+                gfx_.text(line.substr(2), panel.x, y, 25, theme::text, Weight::Bold);
+            y += 42;
+            continue;
+        }
+        if (y > clip.y - 40 && y < kHeight)
+        {
+            const Color color = starts_with(line, "FEHLER") ? theme::bad : starts_with(line, "OK  ") ? theme::ok : theme::dim;
+            gfx_.text(line, panel.x + 24, y, 19, color, Weight::Regular, Align::Left, panel.w - 24);
+        }
+        y += 30;
+    }
+    gfx_.set_clip(nullptr);
 }
 
 void App::draw_keyboard()
@@ -2199,6 +2855,9 @@ void App::draw()
         break;
     case Tab::Downloads:
         draw_downloads();
+        break;
+    case Tab::Diagnose:
+        draw_diagnose();
         break;
     case Tab::Settings:
         draw_settings();

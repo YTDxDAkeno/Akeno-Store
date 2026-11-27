@@ -17,7 +17,8 @@ namespace akeno
 enum class LaunchArgs
 {
     None,        // the runtime opens its own library/file browser
-    MihawkPath,  // MihawkOS: path=<Windows path> (documented in proton_launch.h)
+    MihawkPath,  // MihawkOS: profile=<id> or path=<Windows path> (src/pw_wine_launch.h)
+    Url,         // Parallax Browser: a launch argument with "://" is its start page (ps5browser.c)
 };
 
 struct RuntimeInfo

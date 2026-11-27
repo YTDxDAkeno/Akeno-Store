@@ -10,7 +10,8 @@ Alle Endpunkte wurden am 27. November 2026 live abgefragt (`make -C native probe
 | Game Jolt | `https://gamejolt.com/site-api/web/discover/games?section=hot` | öffentlich, `has_adult_content` gefiltert | Browserspiele → Web-Runtime; übrige → Store-Seite | 36 |
 | GOG | `https://catalog.gog.com/v1/catalog?price=between:0,0…` | öffentlich | Entdecken kostenloser Spiele, Windows-Runtime-Hinweis | 48 |
 | Epic Games | `https://store-site-backend-static.ak.epicgames.com/freeGamesPromotions` | öffentlich | Aktuelle Gratis-Aktionen (Prozentsatz 0, laufender Zeitraum) | 2 |
-| GitHub | `https://api.github.com/repos/<owner>/<repo>/releases/latest` | Asset-Digest von GitHub | Eigene Repositories (Einstellungen) | — |
+| GitHub | `https://api.github.com/repos/<owner>/<repo>/releases/latest` | Asset-Digest von GitHub | Eigene Repositories (Einstellungen), Windows-Builds des Akeno-Katalogs | — |
+| Akeno-Katalog | im Titel: `assets/catalog/akeno.json`; neuere Revision von `raw.githubusercontent.com/YTDxDAkeno/Akeno-Store/main/native/assets/catalog/akeno.json` | Katalog enthält keine Downloads; Windows-Builds nur mit GitHub-SHA-256, native Ports über den signierten ProsperoStore | Kuratierte Spiele aus Abschnitt 9 mit Weg und Kompatibilitätsstatus | 38 |
 
 ## Was bewusst nicht gemacht wird
 
@@ -23,6 +24,23 @@ Alle Endpunkte wurden am 27. November 2026 live abgefragt (`make -C native probe
 - **itch.io-Downloads** für PC brauchen die itch.io-API mit Schlüssel des Nutzers; das ist noch nicht
   eingebaut. Browserspiele funktionieren ohne Konto.
 - **Kein Umgehen von Kaufprüfungen oder Serverautorisierungen.**
+
+## Akeno-Katalog (`native/assets/catalog/akeno.json`)
+
+Schema 1. Jeder Eintrag hat `id` (Kleinbuchstaben, Ziffern, `-`), `title`, `route` und Fakten:
+
+| `route` | Pflichtfelder | Was Akeno anbietet |
+| --- | --- | --- |
+| `ps5` | `title_id` | ergänzt den signierten ProsperoStore-Eintrag derselben Title-ID (Installation dort) |
+| `web` | `url` (HTTPS) | Start im Browser (Parallax Browser mit Startadresse, sonst ProsperoWeb + QR) |
+| `windows` | `repo`, `asset` (Glob, Alternativen mit `|`), `folder`, `programs` | Installation in MihawkOS `C:\Games\<folder>`, Start mit `profile=akeno-<id>` |
+| `external` | `platform`, `compat.note` | nur Information mit Begründung |
+
+Optionale Felder: `developer`, `description`, `genres`, `tags` (`online`, `mmo`, `multiplayer`,
+`singleplayer`, `fan`, `indie`, `open-source`, `pokemon` …), `license`, `needs`, `online`,
+`crossplay`, `controller`, `age`, `adult`, `price`, `free`, `page`, `icon`, `hero`, `screenshots`,
+`compat` (`status`: `untested`, `boots`, `experimental`, `limited`, `verified`, `incompatible`;
+`note`). Ein höherer `revision`-Wert im Repository ersetzt die mitgelieferte Fassung.
 
 ## Neuen Provider hinzufügen
 

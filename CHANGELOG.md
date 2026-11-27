@@ -1,5 +1,31 @@
 # Änderungen
 
+## 01.003.000 – Spiele aus dem Master-Prompt, MihawkOS-Installationen, Kompatibilität, Diagnose
+
+- **Downloads auf der Konsole repariert:** `sceHttp 0x80431073` (Antwort-Header zu groß bei
+  GitHub-Weiterleitungen) mit größerer Header-Grenze behoben; abgebrochene Downloads werden bis zu
+  dreimal per HTTP-Range fortgesetzt; verständliche Fehlertexte für sceHttp-Codes (der DNS-Fall griff
+  wegen einer falschen Bitmaske nie und ist korrigiert).
+- **Akeno-Katalog:** 38 kuratierte kostenlose, Online- und Fanspiele aus Abschnitt 9, jedes mit
+  tatsächlichem Weg auf die PS5 und ehrlichem Kompatibilitätsstatus; native Ports ergänzen den
+  signierten ProsperoStore-Eintrag um Online-, Crossplay- und Steuerungsangaben. Der Katalog liegt
+  im Titel und kann durch eine neuere Revision aus dem Repository ersetzt werden.
+- **Browserspiele starten direkt:** Parallax Browser (`PPSA99207`) übernimmt die Spieladresse als
+  Startargument (lange Adressen über `/data/ps5webkit/open-url.txt`); ProsperoWeb bleibt mit QR-Code.
+- **Windows-Spiele in MihawkOS:** Akeno lädt freie Windows-Builds nur mit von GitHub veröffentlichtem
+  SHA-256, entpackt sie nach `C:\Games\<Name>`, legt den Bibliothekseintrag
+  `/data/ps5proton/games/<id>/game.json` an und startet sie mit `profile=<id>`. Fremde Einträge werden
+  nie überschrieben oder entfernt; die Bibliothek zeigt auch Spiele, die in MihawkOS angelegt wurden.
+- **Kompatibilitätsdatenbank:** eigene Testberichte (Gesamtstatus plus Start, Gameplay, Grafik, Ton,
+  Controller, Online), Nachfrage nach einem Spielstart aus Akeno, Export und Import als JSON; nichts
+  wird gesendet.
+- **Diagnose-Tab:** System und Firmware, Speicherorte, Runtimes, letzter Start über den ELF-Loader,
+  Store-Zustände, Netzwerktest zu allen Stores, Protokoll; „Bericht speichern" schreibt
+  `/data/akeno/diagnose.txt`.
+- **Neue Bereiche:** Kostenlos, Online & Multiplayer, Singleplayer, Fanprojekte, Indie, Windows
+  (MihawkOS), Getestet; neue Regale auf „Entdecken"; Runtimes TrinityXSX und Parallax Browser.
+- Übersicht über den Stand jedes Master-Prompt-Abschnitts: `docs/MASTER_PROMPT_COVERAGE.md`.
+
 ## 01.002.000 – Korrektur nach dem ersten Konsolentest
 
 - Start schlug mit CE-107750-0 fehl: Das RELRO-Segment des Moduls hatte einen Datei-Offset, der nicht

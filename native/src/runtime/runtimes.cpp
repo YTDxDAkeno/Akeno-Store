@@ -15,12 +15,14 @@ namespace akeno
 
 const std::vector<RuntimeInfo> &runtime_registry()
 {
-    // Title IDs as listed in the signed ProsperoStore catalog (2026-11-27).
+    // Title IDs as listed in the signed ProsperoStore catalog (checked 2026-11-27).
     static const std::vector<RuntimeInfo> registry = {
+        {"web", "Parallax Browser", "PPSA99207", "Web-Spiele mit WebGL, WebGPU und Gamepad-API; Akeno öffnet die Spieladresse direkt", LaunchArgs::Url},
         {"web", "ProsperoWeb", "PRWB00001", "HTML5- und WebGL-Spiele, Browser-Exporte von Godot, Unity, Ren'Py und RPG Maker MV/MZ"},
         {"windows", "MihawkOS", "PPSA99170", "Windows-Spiele über Wine/GE-Proton und RADV Vulkan", LaunchArgs::MihawkPath},
         {"windows", "PC5", "PPSA11018", "Eigene PC-Spiele über Wine, DXVK und VKD3D-Proton"},
         {"windows", "Prospero Win", "PPSA99995", "Windows-Spiele mit eigener Wine-Kopie, x86-Übersetzer für 32 Bit"},
+        {"windows", "TrinityXSX", "PPSA83601", "DRM-freie PC- und GOG-Spiele mit eigenem GOG-Installer auf der Konsole"},
         {"retro", "RetroArch", "PPSA99169", "NES, SNES, Game Boy, GBA, Mega Drive, Arcade und weitere Kerne"},
         {"retro", "Genesis Plus GX PS5", "PPSA99921", "Mega Drive, Sega CD, Master System, Game Gear"},
         {"retro", "Snes9x PS5", "PPSA99922", "Super Nintendo"},

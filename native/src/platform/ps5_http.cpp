@@ -175,7 +175,7 @@ class SceHttpTransport final : public Transport
                                : code == 0x80431064u ? "ungültige Server-Antwort"
                                : code == 0x80431075u || (code & 0xFFFFF000u) == 0x80435000u
                                    ? "TLS/Zertifikat – Datum und Uhrzeit der Konsole prüfen"
-                               : (code & 0xFFFF0000u) == 0x80436000u ? "Namensauflösung (DNS)"
+                               : (code & 0xFFFFF000u) == 0x80436000u ? "Namensauflösung (DNS)"
                                                                      : "HTTPS-Anfrage fehlgeschlagen";
             char message[160];
             std::snprintf(message, sizeof message, "%s (sceHttp 0x%08x)", what, code);

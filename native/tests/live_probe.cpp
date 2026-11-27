@@ -19,10 +19,12 @@ int main(int argc, char **argv)
     context.http = &http;
     context.cache_dir = platform::cache_dir();
     context.state_dir = platform::data_dir();
+    context.asset_dir = AKENO_ASSET_DIR;
     fs::make_dirs(context.cache_dir);
     std::vector<std::unique_ptr<Provider>> providers;
     providers.push_back(make_prosperostore_provider());
     providers.push_back(make_recompstore_provider());
+    providers.push_back(make_akeno_provider());
     providers.push_back(make_itch_provider());
     providers.push_back(make_gamejolt_provider());
     providers.push_back(make_gog_provider());

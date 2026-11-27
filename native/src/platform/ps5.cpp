@@ -15,6 +15,7 @@
 #include <cstdio>
 #include <cstring>
 #include <ctime>
+#include <deque>
 #include <fcntl.h>
 #include <mutex>
 #include <netinet/in.h>
@@ -28,6 +29,7 @@ extern "C"
     int sceSystemServiceHideSplashScreen(void);
     int sceSystemServiceLoadExec(const char *path, const char **arguments);
     int sceSystemServiceParamGetInt(int id, int *value);
+    int sceKernelGetProsperoSystemSwVersion(void *version);
 }
 
 namespace akeno::platform
@@ -35,6 +37,7 @@ namespace akeno::platform
 namespace
 {
 std::mutex log_mutex;
+std::deque<std::string> log_lines;
 std::string data_root;
 FILE *log_file = nullptr;
 } // namespace
@@ -102,6 +105,39 @@ std::vector<std::string> import_dirs()
     return dirs;
 }
 
+std::string mihawk_root() { return "/data/ps5proton"; }
+
+std::string firmware_version()
+{
+    struct
+    {
+        std::uint64_t size;
+        char text[0x1C];
+        std::uint32_t version;
+    } version{sizeof version, {}, 0};
+    if (sceKernelGetProsperoSystemSwVersion(&version) != 0)
+        return {};
+    version.text[sizeof version.text - 1] = '\0';
+    std::string text = version.text;
+    // "10.01.00.00..." style strings are trimmed to "10.01".
+    if (text.size() >= 5 && text[2] == '.')
+        text = text.substr(0, 5);
+    else if (text.empty() && version.version)
+    {
+        char built[16];
+        std::snprintf(built, sizeof built, "%x.%02x", version.version >> 24, (version.version >> 16) & 0xff);
+        text = built;
+    }
+    return text;
+}
+
+std::vector<std::string> recent_log(std::size_t lines)
+{
+    std::lock_guard lock(log_mutex);
+    const std::size_t first = log_lines.size() > lines ? log_lines.size() - lines : 0;
+    return {log_lines.begin() + static_cast<std::ptrdiff_t>(first), log_lines.end()};
+}
+
 void log(const char *format, ...)
 {
     char line[512];
@@ -118,6 +154,9 @@ void log(const char *format, ...)
     sceKernelDebugOutText(0, line);
     if (log_file)
         std::fputs(line, log_file);
+    log_lines.emplace_back(line, used);
+    if (log_lines.size() > 300)
+        log_lines.pop_front();
 }
 
 std::uint64_t monotonic_ms()

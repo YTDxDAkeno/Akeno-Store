@@ -15,8 +15,8 @@ PE (x86/x86-64), ELF, Godot-PCK, Ren'Py, RPG-Maker-Projekte, HTML5-Exporte (Godo
 
 | Familie | Runtime-Titel (Reihenfolge) | Startargumente |
 | --- | --- | --- |
-| Web / HTML5, Unity WebGL, Godot Web, RPG Maker MV/MZ | ProsperoWeb `PRWB00001` | keine dokumentierte Start-URL → Akeno zeigt die Adresse (QR) |
-| Windows (PE) | MihawkOS `PPSA99170`, PC5 `PPSA11018`, Prospero Win `PPSA99995` | MihawkOS: `path=<Windows-Pfad>` (in `proton_launch.h` dokumentiert, Konsolentest offen) |
+| Web / HTML5, Unity WebGL, Godot Web, RPG Maker MV/MZ | Parallax Browser `PPSA99207`, ProsperoWeb `PRWB00001` | Parallax: Adresse als Startargument (`ps5browser.c`, `startURLFromLaunch`; über 200 Zeichen über `/data/ps5webkit/open-url.txt`). ProsperoWeb: keine Start-URL → Adresse und QR |
+| Windows (PE) | MihawkOS `PPSA99170`, PC5 `PPSA11018`, Prospero Win `PPSA99995`, TrinityXSX `PPSA83601` | MihawkOS: `profile=<id>` oder `path=<Windows-Pfad>` (`src/pw_wine_launch.h`) |
 | NES, SNES, GB/GBA, Mega Drive | RetroArch `PPSA99169`, Genesis Plus GX, Snes9x, fceuxs5 | keine (Runtime-eigene Bibliothek) |
 | N64 | Mupen64Plus `PPSA99064`, PSGopher, RetroArch | keine |
 | PS1 / PS2 / PSP | PSXS5, SwanStation / PS5SX2, Crux2 / PSP5 | keine |
@@ -36,6 +36,21 @@ ELF-Loader auf Port 9021; die Payload wartet, bis Akeno geschlossen ist, und ruf
 `sceLncUtilLaunchApp` (Fallback `sceSystemServiceLaunchApp`) auf. Hauptmenü-Verknüpfungen sind kleine
 Titelordner `PPSA90500`–`PPSA90599` mit eigener Kachel, `forward.txt` und derselben Payload. Das Design
 stammt von den Forwarder-Kacheln von PS5_RetroArch und MihawkOS (GPL-3.0-or-later). Konsolentest offen.
+
+## Windows-Spiele in MihawkOS
+
+Für Windows-Builds aus dem Akeno-Katalog nutzt Akeno MihawkOS' eigenes Bibliotheksformat
+(MihawkOS `docs/SELF_INSTALL.md`, `ps5/src/proton_launch.cpp` `read_game`):
+
+- Spielordner: `C:\Games\<Name>` = `/data/ps5proton/prefixes/mihawk/drive_c/Games/<Name>`
+  (gemeinsames Präfix `mihawk`; C: legt MihawkOS beim ersten Start an).
+- Bibliothekseintrag: `/data/ps5proton/games/akeno-<id>/game.json` mit `name`, `detail`,
+  `executable` (Windows-Pfad des Programms), `directory` und einem Block `akeno` (Katalog-ID, Version,
+  SHA-256, Ordner). MihawkOS liest nur seine eigenen Felder.
+- Start: MihawkOS `PPSA99170` mit `profile=akeno-<id>`.
+- Das Programm wählt Akeno nach dem Entpacken: zuerst die im Katalog genannten Namen, sonst das einzige
+  x86-/x86-64-Programm; Deinstallationsprogramme, Crash-Handler und Setup-Programme zählen nicht.
+- Ersetzt oder entfernt wird nur, was Akeno selbst angelegt hat. Spielstände unter `C:\users` bleiben.
 
 ## Eigene ROMs und ISOs
 

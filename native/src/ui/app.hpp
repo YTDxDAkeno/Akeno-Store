@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
 
+#include "install/compat.hpp"
 #include "install/installer.hpp"
 #include "install/library.hpp"
 #include "platform/platform.hpp"
@@ -10,6 +11,7 @@
 #include "ui/gfx.hpp"
 #include "ui/images.hpp"
 
+#include <atomic>
 #include <deque>
 #include <functional>
 #include <memory>
@@ -75,6 +77,7 @@ class App
         Library,
         Runtimes,
         Downloads,
+        Diagnose,
         Settings,
         Count
     };
@@ -111,11 +114,19 @@ class App
     bool update_available(const Game &game, const InstalledTitle &title) const;
     bool runtime_installed(const std::string &family, const RuntimeInfo **which) const;
     int game_index_by_title(const std::string &title_id) const;
+    int game_index_by_id(const std::string &id) const;
+    int game_index_for(const InstalledTitle &title) const;
 
     // actions
     std::vector<Action> actions_for(const Game &game) const;
     void run_action(const Game &game, int kind);
-    void launch(const std::string &title_id, const std::vector<std::string> &arguments, const std::string &name);
+    void launch(const std::string &title_id, const std::vector<std::string> &arguments, const std::string &name,
+                const Game *game = nullptr, const std::string &runtime = {});
+    void play_web(const Game &game);
+    void launch_windows(const InstalledTitle &title);
+    void rate_menu(const std::string &game_id, int focus = 0);
+    void ask_pending_report();
+    std::string compat_line(const Game &game) const;
     void install(const Game &game);
     void toast(const std::string &title, const std::string &text, bool error = false);
     void open_detail(int index);
@@ -128,6 +139,7 @@ class App
     void press_library(Button button);
     void press_runtimes(Button button);
     void press_downloads(Button button);
+    void press_diagnose(Button button);
     void press_settings(Button button);
     void press_detail(Button button);
     void press_keyboard(Button button);
@@ -140,6 +152,7 @@ class App
     void draw_library();
     void draw_runtimes();
     void draw_downloads();
+    void draw_diagnose();
     void draw_settings();
     void draw_detail();
     void draw_keyboard();
@@ -161,6 +174,8 @@ class App
     std::unique_ptr<Library> library_;
     std::unique_ptr<Installer> installer_;
     std::unique_ptr<ImageCache> images_;
+    std::unique_ptr<CompatDb> compat_;
+    bool pending_asked_ = false;
     std::vector<platform::InstallRoot> roots_;
 
     std::vector<Game> games_;
@@ -204,6 +219,23 @@ class App
     int download_focus_ = 0;
     int settings_focus_ = 0;
     float settings_scroll_ = 0;
+
+    // diagnose
+    int diagnose_focus_ = 0;   // the action buttons along the top
+    float diagnose_scroll_ = 0, diagnose_target_ = 0;
+    struct Probe
+    {
+        std::string name, url, result;
+        bool ok = false;
+        int ms = -1;
+    };
+    std::mutex probe_mutex_;
+    std::vector<Probe> probes_;
+    std::thread probe_thread_;
+    std::atomic<bool> probing_{false};
+    void start_network_test();
+    std::vector<std::string> diagnose_lines() const;
+    std::string diagnose_report() const;
 
     // overlays
     int detail_ = -1;

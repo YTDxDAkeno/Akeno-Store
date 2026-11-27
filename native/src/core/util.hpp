@@ -2,6 +2,9 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
 
+// The title's content version (sce_sys/param.json contentVersion).
+#define AKENO_VERSION "01.003.000"
+
 #include <cstdint>
 #include <string>
 #include <string_view>

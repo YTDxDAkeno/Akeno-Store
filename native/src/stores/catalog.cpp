@@ -147,6 +147,22 @@ std::vector<Game> Catalog::merge(const std::vector<std::vector<Game>> &lists)
                     for (const std::string &tag : game.tags)
                         if (!kept.has_tag(tag))
                             kept.tags.push_back(tag);
+                    // Curated facts (Akeno catalog) complete a store listing.
+                    if (kept.genres.empty())
+                        kept.genres = game.genres;
+                    if (kept.online.empty())
+                        kept.online = game.online;
+                    if (kept.crossplay.empty())
+                        kept.crossplay = game.crossplay;
+                    if (kept.controller.empty())
+                        kept.controller = game.controller;
+                    if (kept.age.empty())
+                        kept.age = game.age;
+                    if (kept.compat == Compat::Untested && kept.compat_note.empty())
+                    {
+                        kept.compat = game.compat;
+                        kept.compat_note = game.compat_note;
+                    }
                     // e.g. an image-only ProsperoStore listing that RecompStore offers as a ZIP
                     if (kept.access != Access::Install && game.access == Access::Install)
                         kept = game;

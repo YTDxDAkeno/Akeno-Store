@@ -61,16 +61,23 @@ bool github_release(std::string_view release, const std::string &wanted_asset, G
         error = doc.ok() ? "GitHub returned no release" : doc.error();
         return false;
     }
+    // `wanted_asset` may list alternatives separated by '|', best first.
     json::Value chosen;
-    root["assets"].each([&](json::Value asset) {
+    const std::vector<std::string> patterns = wanted_asset.empty() ? std::vector<std::string>{""} : split(wanted_asset, '|');
+    for (const std::string &pattern : patterns)
+    {
+        root["assets"].each([&](json::Value asset) {
+            if (chosen.valid())
+                return;
+            const std::string name = asset.str("name");
+            if (!pattern.empty() ? glob_match(pattern, name)
+                                 : (ends_with(lower(name), ".zip") &&
+                                    (game.title_id.empty() || name.find(game.title_id) != std::string::npos)))
+                chosen = asset;
+        });
         if (chosen.valid())
-            return;
-        const std::string name = asset.str("name");
-        if (!wanted_asset.empty() ? glob_match(wanted_asset, name)
-                                  : (ends_with(lower(name), ".zip") &&
-                                     (game.title_id.empty() || name.find(game.title_id) != std::string::npos)))
-            chosen = asset;
-    });
+            break;
+    }
     if (!chosen.valid())
     {
         error = "The latest release has no matching ZIP asset";

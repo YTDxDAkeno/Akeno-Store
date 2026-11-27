@@ -150,6 +150,42 @@ bool safe_entry_name(const std::string &name)
     return true;
 }
 
+std::optional<Contents> inspect(const std::string &archive, std::string &error, const Limits &limits)
+{
+    Reader reader;
+    if (!open_reader(reader, archive, error))
+        return std::nullopt;
+    std::vector<Item> items;
+    if (!collect(reader, items, error, limits))
+        return std::nullopt;
+    Contents contents;
+    std::string top;
+    bool shared = true;
+    for (const Item &item : items)
+    {
+        const std::size_t slash = item.name.find('/');
+        const std::string first = slash == std::string::npos ? item.name : item.name.substr(0, slash);
+        // A file at the top, or two different top-level names, means there is no common folder.
+        if ((slash == std::string::npos && !item.directory) || (!top.empty() && first != top))
+            shared = false;
+        if (top.empty())
+            top = first;
+        if (!item.directory)
+        {
+            contents.bytes += item.size;
+            ++contents.files;
+        }
+    }
+    if (contents.files == 0)
+    {
+        error = "The archive holds no files";
+        return std::nullopt;
+    }
+    if (shared && !top.empty())
+        contents.prefix = top + "/";
+    return contents;
+}
+
 std::optional<TitleFolder> find_title_folder(const std::string &archive, std::string &error, const Limits &limits)
 {
     Reader reader;

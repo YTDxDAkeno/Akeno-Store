@@ -269,16 +269,18 @@ int main(int argc, char **argv)
             if (ready && now - shot_started > 6000)
             {
                 static const char *names[] = {"01-entdecken", "02-entdecken-regale", "03-store", "04-bibliothek",
-                                              "05-runtimes", "06-downloads", "07-einstellungen", "08-detail"};
+                                              "05-runtimes", "06-downloads", "07-diagnose", "08-einstellungen",
+                                              "09-detail"};
+                constexpr int kShots = static_cast<int>(sizeof names / sizeof names[0]);
                 save_screenshot(renderer, fs::join(screenshots, std::string(names[shot]) + ".png"));
                 platform::log("[akeno] screenshot %s (%.1f ms/frame)", names[shot], frame_avg * 1000);
                 ++shot;
                 shot_started = now - 3500;
-                if (shot >= 8)
+                if (shot >= kShots)
                     running = false;
                 else if (shot == 1)
                     app->press(ui::Button::Down);
-                else if (shot == 7)
+                else if (shot == kShots - 1)
                     app->open_detail_for_test(std::getenv("AKENO_DETAIL") ? std::getenv("AKENO_DETAIL") : "PPSA99874");
                 else
                     app->open_tab_for_test(shot - 1);

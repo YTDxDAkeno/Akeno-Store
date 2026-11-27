@@ -5,6 +5,7 @@
 #include "core/json.hpp"
 #include "core/util.hpp"
 #include "core/zip.hpp"
+#include "install/compat.hpp"
 #include "install/installer.hpp"
 #include "install/library.hpp"
 #include "net/http.hpp"
@@ -518,6 +519,234 @@ static void test_shortcuts()
     fs::remove_tree(fs::parent(dir));
 }
 
+// ---------------------------------------------------------------------------------------
+// Akeno catalog, Windows installs into MihawkOS, compatibility reports
+
+static void test_akeno_catalog()
+{
+    std::string error;
+    std::vector<Game> games;
+    std::int64_t revision = 0;
+    const auto bundled = fs::read_file(std::string(AKENO_ASSET_DIR) + "/catalog/akeno.json", 4 * 1024 * 1024);
+    CHECK(bundled.has_value());
+    CHECK(parse::akeno_catalog(bundled.value_or(""), games, error, &revision));
+    CHECK(revision > 0 && games.size() >= 30);
+    // Every entry is routed to something real or says why it is not playable.
+    int web = 0, windows = 0, ps5 = 0, external = 0;
+    for (const Game &g : games)
+    {
+        CHECK(g.provider == "akeno" && g.id.rfind("akeno:", 0) == 0 && !g.title.empty() && !g.description.empty());
+        if (g.access == Access::Runtime)
+            web += g.runtime == "web" && is_https_url(g.launch_url);
+        else if (g.access == Access::Install)
+            windows += g.runtime == "windows" && !g.source_repo.empty() && !g.programs.empty() &&
+                       g.profile.rfind("akeno-", 0) == 0;
+        else if (!g.title_id.empty())
+            ps5 += is_title_id(g.title_id);
+        else
+        {
+            ++external;
+            if (g.compat_note.empty())
+                std::fprintf(stderr, "external entry without a reason: %s\n", g.id.c_str());
+            CHECK(!g.compat_note.empty()); // an entry Akeno cannot start says why
+        }
+        CHECK(g.compat != Compat::Verified); // nothing is verified before a console test
+    }
+    CHECK(web >= 3 && windows >= 1 && ps5 >= 3 && external >= 5);
+
+    // Shape errors and bad entries.
+    CHECK(!parse::akeno_catalog(R"({"schema":2,"games":[]})", games, error, nullptr));
+    std::vector<Game> few;
+    CHECK(parse::akeno_catalog(
+        R"({"schema":1,"revision":1,"games":[
+            {"id":"ok-web","route":"web","title":"W","url":"https://example.com/play"},
+            {"id":"bad-web","route":"web","title":"W","url":"http://example.com/"},
+            {"id":"Bad Id","route":"web","title":"W","url":"https://example.com/"},
+            {"id":"win","route":"windows","title":"Win","repo":"o/r","asset":"a-*-win64.zip|a.zip","folder":"Win Game",
+             "programs":["game.exe"],"compat":{"status":"experimental","note":"n"}},
+            {"id":"win-evil","route":"windows","title":"E","repo":"o/r","asset":"a.zip","folder":"../x","programs":["a.exe"]},
+            {"id":"ps5","route":"ps5","title":"P","title_id":"PPSA12345","tags":["Online","fan"]},
+            {"id":"ok-web","route":"web","title":"dup","url":"https://example.com/"}]})",
+        few, error, nullptr));
+    CHECK(few.size() == 3);
+    CHECK(few.size() == 3 && few[0].launch_url == "https://example.com/play" && few[1].folder_name == "Win Game" &&
+          few[1].compat == Compat::Experimental && few[1].profile == "akeno-win" && few[2].has_tag("online"));
+
+    // A curated overlay adds its facts to the signed listing with the same title ID.
+    Game store;
+    store.id = "prosperostore:PPSA12345";
+    store.provider = "prosperostore";
+    store.title_id = "PPSA12345";
+    store.access = Access::Install;
+    store.signed_catalog = true;
+    Game overlay = few.size() == 3 ? few[2] : Game();
+    overlay.online = "Offizielle Server";
+    overlay.compat = Compat::Boots;
+    overlay.compat_note = "Startet";
+    const auto merged = Catalog::merge({{store}, {overlay}});
+    CHECK(merged.size() == 1 && merged[0].signed_catalog && merged[0].access == Access::Install &&
+          merged[0].online == "Offizielle Server" && merged[0].compat == Compat::Boots && merged[0].has_tag("online"));
+
+    // Alternatives in an asset pattern, best first.
+    Game asset;
+    const std::string release =
+        R"({"tag_name":"5.14.0","assets":[
+            {"name":"luanti-5.14.0-win32.zip","browser_download_url":"https://github.com/a/b/32.zip","size":1,"digest":"sha256:)" +
+        std::string(64, 'c') + R"("},
+            {"name":"luanti-5.14.0-win64.zip","browser_download_url":"https://github.com/a/b/64.zip","size":2,"digest":"sha256:)" +
+        std::string(64, 'd') + R"("}]})";
+    CHECK(parse::github_release(release, "luanti-*-win64.zip|luanti-*-win32.zip", asset, error));
+    CHECK(asset.asset_name == "luanti-5.14.0-win64.zip" && asset.sha256 == std::string(64, 'd') && asset.version == "5.14.0");
+}
+
+static std::string pe_program(unsigned machine)
+{
+    std::string pe(512, '\0');
+    pe[0] = 'M';
+    pe[1] = 'Z';
+    pe[0x3c] = 0x80;
+    pe[0x80] = 'P';
+    pe[0x81] = 'E';
+    pe[0x84] = static_cast<char>(machine & 0xff);
+    pe[0x85] = static_cast<char>(machine >> 8);
+    return pe;
+}
+
+static void test_windows_install()
+{
+    const std::string dir = temp_dir("mihawk");
+    fs::make_dirs(dir);
+    const std::string root = fs::join(dir, "data/ps5proton");
+    const std::string zip_path = fs::join(dir, "game.zip");
+    const std::string zip = make_zip(zip_path, {{"TestGame-1.0/bin/testgame.exe", pe_program(0x8664)},
+                                                {"TestGame-1.0/bin/unins000.exe", pe_program(0x14c)},
+                                                {"TestGame-1.0/tools/server.exe", pe_program(0x8664)},
+                                                {"TestGame-1.0/arm/testgame.exe", pe_program(0xaa64)},
+                                                {"TestGame-1.0/data/levels.txt", "level"}});
+    zip::Limits limits;
+    std::string error;
+    const auto contents = zip::inspect(zip_path, error, limits);
+    CHECK(contents && contents->prefix == "TestGame-1.0/" && contents->files == 5);
+
+    auto transport = std::make_unique<FakeTransport>();
+    transport->bodies["https://github.com/o/r/releases/download/v1/game.zip"] = zip;
+    net::Client client(std::move(transport));
+    Library library(fs::join(dir, "receipts"));
+    Installer installer(client, library, fs::join(dir, "receipts"), [](Game &, std::string &e) {
+        e = "no resolver in this test";
+        return false;
+    });
+    Game game;
+    game.id = "akeno:testgame";
+    game.provider = "akeno";
+    game.title = "Test Game";
+    game.kind = "game";
+    game.runtime = "windows";
+    game.access = Access::Install;
+    game.version = "v1.0";
+    game.profile = "akeno-testgame";
+    game.folder_name = "Test Game";
+    game.programs = {"TestGame.exe"};
+    game.artifact_url = "https://github.com/o/r/releases/download/v1/game.zip";
+    game.sha256 = sha256_hex(zip);
+    game.size = zip.size();
+    game.resolved = true;
+
+    // MihawkOS has not created its C: drive yet: nothing is downloaded or written.
+    JobState state{};
+    CHECK(wait_for(installer, installer.install(game, root), state) && state == JobState::Failed);
+    CHECK(!fs::exists(fs::join(root, "games")));
+
+    fs::make_dirs(mihawk_drive_c(root));
+    CHECK(wait_for(installer, installer.install(game, root), state) && state == JobState::Done);
+    const std::string folder = fs::join(mihawk_drive_c(root), "Games/Test Game");
+    CHECK(fs::is_file(fs::join(folder, "bin/testgame.exe")) && fs::is_file(fs::join(folder, "data/levels.txt")));
+    const std::string entry = fs::read_file(fs::join(root, "games/akeno-testgame/game.json")).value_or("");
+    const json::Document doc = json::Document::parse(entry);
+    CHECK(doc.root().str("executable") == "C:\\Games\\Test Game\\bin\\testgame.exe");
+    CHECK(doc.root().str("directory") == "C:\\Games\\Test Game\\bin");
+    CHECK(doc.root().str("name") == "Test Game" && doc.root()["akeno"].str("folder") == "Test Game" &&
+          doc.root()["akeno"].str("version") == "v1.0" && doc.root()["akeno"].str("sha256") == game.sha256);
+    auto games = Library::scan_mihawk(root);
+    CHECK(games.size() == 1 && games[0].windows && games[0].managed && games[0].profile == "akeno-testgame" &&
+          games[0].content_version == "v1.0" && games[0].folder == folder && games[0].source_game_id == "akeno:testgame");
+
+    // A game MihawkOS knows but Akeno did not install is listed, never replaced or removed.
+    fs::make_dirs(fs::join(root, "games/mygame"));
+    fs::write_atomic(fs::join(root, "games/mygame/game.json"), R"({"name":"Mine","executable":"C:\\Games\\Mine\\m.exe"})");
+    games = Library::scan_mihawk(root);
+    CHECK(games.size() == 2 && !games[0].managed && games[0].name == "Mine");
+    CHECK(wait_for(installer, installer.uninstall(games[0]), state) && state == JobState::Failed);
+    CHECK(fs::is_file(fs::join(root, "games/mygame/game.json")));
+    Game foreign = game;
+    foreign.id = "akeno:other";
+    foreign.profile = "akeno-other";
+    CHECK(wait_for(installer, installer.install(foreign, root), state) && state == JobState::Failed); // folder is taken
+    CHECK(fs::is_file(fs::join(folder, "bin/testgame.exe")));
+
+    // Program choice: the preferred name, else the only program, else a clear error.
+    std::string relative;
+    CHECK(Installer::find_windows_program(folder, {"missing.exe", "TESTGAME.EXE"}, relative, error) &&
+          relative == "bin/testgame.exe");
+    CHECK(!Installer::find_windows_program(folder, {}, relative, error) && error.find("server.exe") != std::string::npos);
+
+    // Uninstall removes the folder and the library entry.
+    games = Library::scan_mihawk(root);
+    const InstalledTitle *ours = nullptr;
+    for (const InstalledTitle &t : games)
+        if (t.managed)
+            ours = &t;
+    CHECK(ours != nullptr);
+    if (ours)
+        CHECK(wait_for(installer, installer.uninstall(*ours), state) && state == JobState::Done);
+    CHECK(!fs::exists(folder) && !fs::exists(fs::join(root, "games/akeno-testgame")));
+    CHECK(Library::scan_mihawk(root).size() == 1);
+    fs::remove_tree(fs::parent(dir));
+}
+
+static void test_compat_db()
+{
+    const std::string dir = temp_dir("compat");
+    const std::string path = fs::join(dir, "compat.json");
+    {
+        CompatDb db(path);
+        CHECK(db.all().empty() && !db.pending());
+        CompatReport report;
+        report.game_id = "akeno:luanti";
+        report.title = "Luanti";
+        report.status = Compat::Limited;
+        report.graphics = Aspect::Issues;
+        report.firmware = "10.01";
+        report.tested = 100;
+        db.put(report);
+        db.set_pending({"prosperostore:PPSA98001", "PokeMMO Prospero", "PS5-Titel", 42});
+    }
+    CompatDb db(path);
+    CHECK(db.all().size() == 1 && db.find("akeno:luanti") && db.find("akeno:luanti")->status == Compat::Limited &&
+          db.find("akeno:luanti")->graphics == Aspect::Issues && db.find("akeno:luanti")->firmware == "10.01");
+    CHECK(db.pending() && db.pending()->game_id == "prosperostore:PPSA98001" && db.pending()->started == 42);
+    db.clear_pending();
+    CHECK(!CompatDb(path).pending());
+
+    // Import keeps the newer test of each game.
+    const std::string exported = db.export_json();
+    CompatDb other(fs::join(dir, "other.json"));
+    std::string error;
+    CHECK(other.import_json(exported, error) == 1 && other.find("akeno:luanti"));
+    std::string older = exported, newer = exported;
+    older.replace(older.find("\"tested\":100"), 12, "\"tested\":50");
+    CHECK(other.import_json(older, error) == 0);
+    newer.replace(newer.find("\"limited\""), 9, "\"verified\"");
+    newer.replace(newer.find("\"tested\":100"), 12, "\"tested\":200");
+    CHECK(other.import_json(newer, error) == 1 && other.find("akeno:luanti")->status == Compat::Verified);
+    CHECK(other.import_json("{\"kind\":\"something\"}", error) < 0);
+    CHECK(next_aspect(Aspect::Unknown) == Aspect::Works && next_aspect(Aspect::Fails) == Aspect::Unknown);
+    CHECK(compat_from_key(compat_key(Compat::Boots)) == Compat::Boots);
+    other.remove("akeno:luanti");
+    CHECK(other.all().empty());
+    fs::remove_tree(fs::parent(dir));
+}
+
 int main()
 {
     platform::init();
@@ -530,6 +759,9 @@ int main()
     test_merge();
     test_runtime_detection();
     test_shortcuts();
+    test_akeno_catalog();
+    test_windows_install();
+    test_compat_db();
     std::printf("%d checks, %d failures\n", checks, failures);
     return failures ? 1 : 0;
 }

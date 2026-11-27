@@ -11,6 +11,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <ctime>
+#include <deque>
 #include <mutex>
 
 namespace akeno::platform
@@ -27,6 +28,7 @@ std::string data_root()
     return fs::join(home ? home : "/tmp", ".local/share/akeno-native");
 }
 std::mutex log_mutex;
+std::deque<std::string> log_lines;
 } // namespace
 
 void init() { fs::make_dirs(data_dir()); }
@@ -50,14 +52,35 @@ std::vector<std::string> import_dirs()
     return {dir};
 }
 
+std::string mihawk_root()
+{
+    const std::string root = fs::join(data_root(), "simulated-ps5/data/ps5proton");
+    return root;
+}
+
+std::string firmware_version() { return "Linux-Host"; }
+
 void log(const char *format, ...)
 {
-    std::lock_guard lock(log_mutex);
+    char line[512];
     va_list args;
     va_start(args, format);
-    std::vfprintf(stderr, format, args);
+    const int length = std::vsnprintf(line, sizeof line, format, args);
     va_end(args);
-    std::fputc('\n', stderr);
+    if (length < 0)
+        return;
+    std::lock_guard lock(log_mutex);
+    std::fprintf(stderr, "%s\n", line);
+    log_lines.emplace_back(line);
+    if (log_lines.size() > 300)
+        log_lines.pop_front();
+}
+
+std::vector<std::string> recent_log(std::size_t lines)
+{
+    std::lock_guard lock(log_mutex);
+    const std::size_t first = log_lines.size() > lines ? log_lines.size() - lines : 0;
+    return {log_lines.begin() + static_cast<std::ptrdiff_t>(first), log_lines.end()};
 }
 
 std::uint64_t monotonic_ms()

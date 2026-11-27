@@ -4,10 +4,26 @@
 
 #include <cstdint>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace akeno
 {
+
+// Compatibility of an entry on the PS5 (master prompt section 19). The catalog states what
+// is known; a report the user makes after playing takes precedence on this console.
+enum class Compat
+{
+    Untested,     // Noch nicht getestet
+    Verified,     // Verifiziert spielbar
+    Limited,      // Spielbar mit Einschränkungen
+    Experimental, // Experimentell
+    Boots,        // Startet, Gameplay unbestätigt
+    Incompatible, // Nicht kompatibel
+};
+const char *compat_label(Compat compat);
+Compat compat_from_key(std::string_view key); // untested, verified, limited, experimental, boots, incompatible
+const char *compat_key(Compat compat);
 
 // How Akeno can act on an entry. This is what the UI offers; nothing is faked.
 enum class Access
@@ -57,8 +73,22 @@ struct Game
     std::uint64_t size = 0;
     std::string release_notes;
     std::string source_repo; // owner/name on GitHub
-    std::string asset_name;  // GitHub release asset to resolve
+    std::string asset_name;  // GitHub release asset to resolve (glob; '|' separates alternatives)
     bool resolved = false;
+
+    // Windows games installed into MihawkOS's library (runtime "windows", access Install).
+    std::string profile;                // MihawkOS catalog ID (/data/ps5proton/games/<profile>)
+    std::string folder_name;            // C:\Games\<folder_name>
+    std::vector<std::string> programs;  // preferred program file names, best first
+
+    // Curated facts (Akeno catalog); empty when unknown.
+    std::vector<std::string> genres;
+    std::string online;     // e.g. "Offizielle Server", "Nur lokal"
+    std::string crossplay;  // e.g. "PC, Android, iOS"
+    std::string controller; // e.g. "DualSense", "Maus und Tastatur nötig"
+    std::string age;        // age rating text when published (USK/PEGI/ESRB)
+    Compat compat = Compat::Untested;
+    std::string compat_note; // why: what was tested, what blocks it
 
     bool has_tag(const std::string &tag) const
     {

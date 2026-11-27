@@ -27,6 +27,13 @@ std::string cache_dir();  // artwork and catalog caches
 std::vector<InstallRoot> install_roots();
 // Where the user drops ROMs, ISOs and other own game files for import.
 std::vector<std::string> import_dirs();
+// MihawkOS's data folder (games/<id>/game.json, prefixes/mihawk/drive_c). Host: simulated.
+std::string mihawk_root();
+
+// System software version, e.g. "10.01" (host: "Linux-Host"); empty when unknown.
+std::string firmware_version();
+// The last log lines (newest last), for the diagnostics screen.
+std::vector<std::string> recent_log(std::size_t lines);
 
 void log(const char *format, ...) __attribute__((format(printf, 1, 2)));
 std::uint64_t monotonic_ms();
