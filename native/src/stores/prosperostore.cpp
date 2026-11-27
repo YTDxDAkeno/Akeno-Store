@@ -57,7 +57,8 @@ void apply_common(json::Value app, Game &game)
     game.size = static_cast<std::uint64_t>(std::max<std::int64_t>(0, app["size"].integer(0)));
     game.icon_url = app.str("icon_small", app.str("icon"));
     game.cover_url = app.str("icon", game.icon_url);
-    game.page_url = app.str("page");
+    // index.json carries no page address; the API documents /app/<id>/ on the website.
+    game.page_url = app.str("page", "https://prosperostore.net/app/" + id + "/");
     game.released = app.str("released");
     game.updated = app.str("updated");
     game.signed_catalog = true;

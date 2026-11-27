@@ -12,7 +12,7 @@ INCLUDES := -Isrc -Ithird_party/yyjson -Ithird_party/monocypher -Ithird_party/mi
 	-Ithird_party/stb -Ithird_party/qrcodegen
 CXXFLAGS ?= -O2 -g
 CFLAGS ?= -O2 -g
-ALL_CXXFLAGS := -std=c++20 -fno-exceptions -fno-rtti $(WARN) $(INCLUDES) $(SDL_CFLAGS) -DAKENO_HOST=1 $(CXXFLAGS)
+ALL_CXXFLAGS := -std=c++20 -fno-exceptions -fno-rtti $(WARN) $(INCLUDES) $(SDL_CFLAGS) -DAKENO_HOST=1 -DAKENO_ASSET_DIR='"$(CURDIR)/assets"' $(CXXFLAGS)
 ALL_CFLAGS := -std=c11 $(INCLUDES) -DMINIZ_NO_TIME -D_DEFAULT_SOURCE $(CFLAGS)
 
 CORE_SOURCES := $(wildcard src/core/*.cpp src/net/*.cpp src/stores/*.cpp src/install/*.cpp src/runtime/*.cpp) \
