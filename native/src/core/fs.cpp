@@ -207,6 +207,12 @@ void chmod_tree(const std::string &path, unsigned mode)
             chmod_tree(join(path, entry.name), mode);
 }
 
+#if defined(__PROSPERO__)
+// statfs/fstatfs live in libkernel_sys, which a title does not load; libkernel exports the
+// underscored system call (as ProsperoStore's storage probe found).
+extern "C" int akeno_fstatfs(int, struct statfs *) __asm__("_fstatfs");
+#endif
+
 std::optional<std::uint64_t> free_space(const std::string &path)
 {
 #if defined(__linux__)
@@ -215,8 +221,17 @@ std::optional<std::uint64_t> free_space(const std::string &path)
         return std::nullopt;
     return static_cast<std::uint64_t>(info.f_bavail) * info.f_frsize;
 #else
+    const int fd = ::open(path.c_str(), O_RDONLY | O_DIRECTORY);
+    if (fd < 0)
+        return std::nullopt;
     struct statfs info{};
-    if (::statfs(path.c_str(), &info) != 0)
+#if defined(__PROSPERO__)
+    const int measured = akeno_fstatfs(fd, &info);
+#else
+    const int measured = ::fstatfs(fd, &info);
+#endif
+    ::close(fd);
+    if (measured != 0)
         return std::nullopt;
     return static_cast<std::uint64_t>(info.f_bavail) * info.f_bsize;
 #endif

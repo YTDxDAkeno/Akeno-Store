@@ -1,0 +1,5 @@
+/* The PS5 module converter publishes no application exports: everything stays local. */
+{
+    local:
+        *;
+};

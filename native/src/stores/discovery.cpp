@@ -244,13 +244,17 @@ bool epic_promotions(std::string_view text, std::int64_t now, std::vector<Game> 
         return false;
     }
     const auto parse_time = [](const std::string &iso) -> std::int64_t {
-        std::tm tm{};
-        if (iso.size() < 19 || std::sscanf(iso.c_str(), "%4d-%2d-%2dT%2d:%2d:%2d", &tm.tm_year, &tm.tm_mon,
-                                           &tm.tm_mday, &tm.tm_hour, &tm.tm_min, &tm.tm_sec) != 6)
+        int y = 0, m = 0, d = 0, hh = 0, mm = 0, ss = 0;
+        if (iso.size() < 19 || std::sscanf(iso.c_str(), "%4d-%2d-%2dT%2d:%2d:%2d", &y, &m, &d, &hh, &mm, &ss) != 6)
             return 0;
-        tm.tm_year -= 1900;
-        tm.tm_mon -= 1;
-        return static_cast<std::int64_t>(timegm(&tm));
+        // Days from the civil date (H. Hinnant's algorithm): no timegm in the console's libc.
+        y -= m <= 2;
+        const std::int64_t era = (y >= 0 ? y : y - 399) / 400;
+        const std::int64_t yoe = y - era * 400;
+        const std::int64_t doy = (153 * (m + (m > 2 ? -3 : 9)) + 2) / 5 + d - 1;
+        const std::int64_t doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+        const std::int64_t days = era * 146097 + doe - 719468;
+        return days * 86400 + hh * 3600 + mm * 60 + ss;
     };
     elements.each([&](json::Value e) {
         bool free_now = false;

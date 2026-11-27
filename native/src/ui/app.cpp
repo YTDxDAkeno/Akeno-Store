@@ -26,7 +26,7 @@ namespace theme
 const Color bg{7, 10, 26};
 const Color panel{17, 21, 52, 236};
 const Color panel_hi{30, 36, 84, 245};
-const Color line{70, 80, 160, 140};
+
 const Color accent{139, 92, 246};
 const Color accent2{88, 120, 255};
 const Color glow{160, 110, 255};
