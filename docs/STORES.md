@@ -1,44 +1,31 @@
 # Store-Anbindungen
 
-Akeno zeigt veröffentlichte Projekte und Releases im Katalog an. Für eine Installation benötigt der Hub ein autorisiertes, unterstütztes Paket mit passender Prüfsumme. Ein Katalogeintrag bestätigt weder die Installierbarkeit noch den Start auf einer PS5.
+Alle Endpunkte wurden am 27. November 2026 live abgefragt (`make -C native probe`).
 
-| Quelle | Daten | Stand |
-| --- | --- | --- |
-| GitHub | Öffentliche Atom-Feeds mit Release-Tag, Release-Titel und Zeitstempel. Für ausgewählte Projekte ergänzt Akeno Beschreibung, Genre, Zielplattform und den Geltungsbereich der Codelizenz. | Live geprüft für Mindustry, EasyRPG Player, SuperTuxKart, OpenGOAL, Ship of Harkinian, ProsperoCraft, PokeMMO Prospero und Dusklight. |
-| ProsperoStore | Offizielle Quellrecords für zehn kuratierte Spiele, einschließlich SudokuZen, Lantern Miner, Dungeon Crawl Stone Soup, NetHack, Brogue CE, ProsperoPuzzles und OpenRCT2. Ausgewählte Einträge enthalten Cover aus dem Original-Repository. | Alle zehn Quellrecords live geprüft. Der Katalog liefert Metadaten, keine Installationspakete an Akeno. |
-| itch.io | Der öffentliche RSS-Feed für kostenlos gelistete Spiele liefert Titel, Entwickler, Kategorien und Veröffentlichungsdaten, soweit der Feed sie meldet. Externe Vorschauen, Feed-HTML und als eingeschränkt markierte Einträge werden ausgeblendet. | Import mit RSS-Testdaten geprüft. Der Live-Test erreicht in der Cloud den Proxy und erhält HTTP 403. |
-| Eigene Manifeste | Versionierte JSON-Kataloge mit autorisierten HTML5-ZIP-Paketen, Lizenzangaben, SHA-256, Startdatei und optionaler Beschreibung. Betreibergeprüfte Covers und bis zu sechs Screenshots können bei Einstufung `all` oder `teen` als HTTPS-Metadaten veröffentlicht werden. | Lokale Validierung und Import implementiert. Medienmetadaten allein prüfen keine Bildrechte und laden die Bilder nicht herunter. |
-| GOG, Game Jolt und RecompStore | Eine nachgewiesene öffentliche Katalogschnittstelle oder Anbieterautorisierung für Akeno steht aus. | In dieser Version gibt es für diese Dienste keine Kontosynchronisierung, Downloadintegration oder nachgebildeten Ergebnisse. |
+| Store | Endpunkt | Vertrauen | Akeno-Funktion | Live |
+| --- | --- | --- | --- | --- |
+| ProsperoStore | `https://prosperostore.net/api/v1/` (`manifest.json`, `manifest.sig`, `index.json`, `apps/<id>.json`) | Ed25519-Signatur (Schlüssel `da351006acb6e3c3`, `eef399ea3007720a`), Sequenz nie rückwärts, SHA-256 jeder Datei, SHA-256 jedes Downloads | Installieren, Aktualisieren, Entfernen; Detailseite lädt den geprüften App-Datensatz | 243 Einträge |
+| RecompStore | `https://www.recompstore.com/catalog.json` (`v2Apps`, `apps`, `comingSoon*`) | Katalog unsigniert, meist ohne SHA-256 → Download nur, wenn GitHub einen SHA-256-Digest für das Asset veröffentlicht (und er mit einem Katalogwert übereinstimmt) | Installieren über das neueste GitHub-Release; „Benötigt" zeigt das eigene Original | 162 Einträge |
+| itch.io | `https://itch.io/games/free/platform-web.xml`, `https://itch.io/games/free.xml` | öffentliche Feeds, Erwachsenen-Filter | Browserspiele → Web-Runtime; übrige → Store-Seite | 60–61 |
+| Game Jolt | `https://gamejolt.com/site-api/web/discover/games?section=hot` | öffentlich, `has_adult_content` gefiltert | Browserspiele → Web-Runtime; übrige → Store-Seite | 36 |
+| GOG | `https://catalog.gog.com/v1/catalog?price=between:0,0…` | öffentlich | Entdecken kostenloser Spiele, Windows-Runtime-Hinweis | 48 |
+| Epic Games | `https://store-site-backend-static.ak.epicgames.com/freeGamesPromotions` | öffentlich | Aktuelle Gratis-Aktionen (Prozentsatz 0, laufender Zeitraum) | 2 |
+| GitHub | `https://api.github.com/repos/<owner>/<repo>/releases/latest` | Asset-Digest von GitHub | Eigene Repositories (Einstellungen) | — |
 
-Links zu den jeweils öffentlichen Verträgen und Quellen finden sich am Ende. Der ProsperoStore-Upstream erzeugt seine öffentliche API aus den Quellrecords. Ein späterer Installer braucht einen freigegebenen nativen Paketpfad sowie die nachweisliche Signatur-, Artefakt- und Rollback-Prüfung des Veröffentlichungskanals. Die öffentlichen GitHub- und itch.io-Feeds enthalten keine Besitznachweise für Käufe.
+## Was bewusst nicht gemacht wird
 
-## Live-Prüfung unter Linux, WSL oder PowerShell
+- **Keine Downloads ohne Prüfsumme.** Ein RecompStore-Eintrag, dessen GitHub-Asset keinen Digest hat,
+  wird nicht installiert.
+- **Keine Konto-Integrationen ohne offizielle Autorisierung.** GOG- und Epic-Bibliotheken setzen deren
+  OAuth-Clients voraus; Akeno zeigt dort nur, was öffentlich ist, und verlinkt die Store-Seite (QR).
+  Gekaufte Windows-Spiele können nach dem Download am PC als eigene Dateien in `/data/akeno/games`
+  gelegt und über die Windows-Runtime gestartet werden.
+- **itch.io-Downloads** für PC brauchen die itch.io-API mit Schlüssel des Nutzers; das ist noch nicht
+  eingebaut. Browserspiele funktionieren ohne Konto.
+- **Kein Umgehen von Kaufprüfungen oder Serverautorisierungen.**
 
-Im Projektordner mit Python 3.12 testen. Die normalen Tests ohne `AKENO_LIVE_STORES` arbeiten ohne externe Dienste.
+## Neuen Provider hinzufügen
 
-```bash
-AKENO_LIVE_STORES=github,prosperostore python3 -m unittest discover -s tests -p test_stores_live.py -v
-AKENO_LIVE_STORES=itch python3 -m unittest discover -s tests -p test_stores_live.py -v
-```
-
-```powershell
-$env:AKENO_LIVE_STORES = 'itch'
-py -3.12 -m unittest discover -s tests -p test_stores_live.py -v
-Remove-Item Env:AKENO_LIVE_STORES
-```
-
-Der itch.io-Test lädt den echten öffentlichen Feed und verlangt mindestens einen sichtbaren Eintrag. Ein Verbindungsfehler führt zu einem fehlgeschlagenen Test. Für den öffentlichen Feed sind weder Anmeldung noch Zugriffstoken nötig. Für die Cloud-Freigabe genügt die Domain `itch.io` für diesen Test.
-
-## Eigenen Katalog prüfen
-
-```bash
-python3 -m stores manifests/example.catalog.json
-python3 -m core.server --offline --manifest /pfad/zum/katalog.json
-```
-
-Die Option `--catalog-url` akzeptiert HTTPS-Quellen, die der Betreiber ausdrücklich ausgewählt hat. Die Beispiel-Datei ist leer. Die Felder für eigene autorisierte, geprüfte Pakete stehen im [Manifest-Schema](../manifests/catalog.schema.json).
-
-- [GitHub Releases](https://docs.github.com/en/repositories/releasing-projects-on-github/about-releases)
-- [ProsperoStore API-Vertrag](https://github.com/darkxex/ps5-homebrew-catalog/blob/main/docs/api.md)
-- [itch.io API-Dokumentation](https://itch.io/docs/api/overview)
-- [itch.io öffentlicher kostenloser Feed](https://itch.io/games/price-free.xml)
+`native/src/stores/provider.hpp`: `refresh()` liefert `Game`-Einträge mit ehrlicher `Access`-Art;
+`resolve()` füllt `artifact_url` und `sha256` erst bei Bedarf. Parser gehören in den Namensraum
+`parse` und bekommen Tests in `native/tests/core_tests.cpp`.

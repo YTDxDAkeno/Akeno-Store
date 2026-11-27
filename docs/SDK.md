@@ -1,16 +1,29 @@
-# Provider- und Runtime-Schnittstellen
+# Schnittstellen für Erweiterungen
 
-## Provider
+## Store-Provider (native App)
 
-Provider stellen `list_games() -> list[dict]` bereit. Der Host registriert sie mit einem eindeutigen Anzeigenamen. Katalogeinträge haben mindestens `id` und `title`. `stores.ManifestProvider` validiert den Paketvertrag. ID-Kollisionen werden in Reihenfolge der Quellen aufgelöst. Die integrierte Offline-Quelle steht zuerst.
-
-```sh
-python3 -m stores manifests/example.catalog.json
-python3 -m core.server --offline --manifest manifests/example.catalog.json
+```cpp
+class Provider {
+    virtual const char *id() const;      // "itch", "gog", ...
+    virtual const char *label() const;   // Anzeigename
+    virtual const char *about() const;   // Vertrauensmodell in einem Satz
+    virtual bool refresh(ProviderContext &, std::vector<Game> &, std::string &error);
+    virtual bool resolve(ProviderContext &, Game &, std::string &error); // Download-URL + SHA-256
+};
 ```
 
-Für ein eigenes Paket verwende das Schema in `manifests/`, die Architektur `any`, eine existierende relative HTML-Startdatei und SHA-256 des fertigen ZIP. Stelle das ZIP nur über einen bestätigten HTTPS-Endpunkt bereit. Entwickler können der Runtime kompatible Metadaten hinzufügen, ohne spielspezifischen Startercode zu ändern.
+Ein `Game` trägt eine `Access`-Art (`Install`, `Runtime`, `External`, `Upcoming`). Die Oberfläche bietet
+nur Aktionen an, die zur Art passen. Neue Provider werden in `ui/app.cpp` registriert und erhalten
+Parser-Tests in `native/tests/core_tests.cpp`.
 
-## HTML5-Runtime
+## Runtime-Titel
 
-Die Runtime startet die im Manifest eingetragene Datei in einem opaque-origin Frame. Nutze relative Pfade und klassische Skripte. Für Richtungsnavigation akzeptiert Signal Drift Nachrichten im Format `{type: "akeno-direction", key: "ArrowLeft"}` aus `window.parent`. Weitere Spiele können denselben Vertrag implementieren. Die Manifestvalidierung lässt derzeit HTML5 zu. Ein natives SDK und ein Recompilation-Profilformat setzen eine validierte Ziel-Toolchain voraus.
+`runtime_registry()` in `native/src/runtime/runtimes.cpp` ordnet Formatfamilien den Title-IDs von
+PS5-Runtime-Titeln zu. Neue Formate brauchen eine Signatur-Erkennung in `detect_file()` und einen Test.
+Startargumente nur eintragen, wenn das Runtime-Projekt sie dokumentiert (`LaunchArgs`).
+
+## Eigene Kataloge (Python-Host-Hub)
+
+`manifests/catalog.schema.json` beschreibt versionierte HTML5-Kataloge für den Web-Hub
+(`python3 -m stores manifests/example.catalog.json`). Für PS5-Titel ist der ProsperoStore-Katalogvertrag
+der empfohlene Weg: Ein Fork von ps5-homebrew-catalog veröffentlicht dieselbe API.

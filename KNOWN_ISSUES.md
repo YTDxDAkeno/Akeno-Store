@@ -1,7 +1,21 @@
 # Bekannte Einschränkungen
 
-- Der Cloud-Proxy verweigert den Zugriff auf itch.io, ProsperoStore, RecompStore und Homebrew Network. Der itch.io-Parser ist mit RSS-Fixtures geprüft.
-- Öffentliche GitHub- und itch.io-Einträge dienen der Suche. Installation setzt ein vollständiges, geprüftes Manifest voraus.
-- Die Downloadanzeige meldet übertragene und erwartete Bytes. Persistente Warteschlange, Pausieren, Fortsetzen, Delta-Updates und manueller Versionswechsel fehlen.
-- Installationen sind lokal und die Quelle muss zum Reparieren weiterhin verfügbar sein. Spielstandverwaltung und Benutzerprofile fehlen.
-- Konten, native PS5-Pakete, Firmwarefreigaben, PS5-Menüverknüpfungen, externe Builds, Recompilation und tatsächliches Crossplay stehen aus.
+- **Kein Konsolentest.** Der Titel ist gebaut, signiert und paketiert, aber nicht auf einer PS5
+  gestartet. Leistung des SDL-Software-Renderers bei 1080p, `sceHttp`, Installation, Starts und
+  Verknüpfungen sind auf der Konsole unbestätigt ([Testplan](INSTALLATION.md#erster-test-auf-der-ps5)).
+- **Große Installationen sind langsam.** Die Konsole drosselt Schreibzugriffe eines Titels nach einigen
+  hundert MB auf rund 2 MB/s. ProsperoStore lagert das Entpacken in einen Loader-Worker aus; Akeno
+  entpackt noch im eigenen Prozess.
+- **Deinstallation entfernt die Hauptmenü-Kachel nicht sofort.** ProsperoStore ruft dafür
+  `sceAppInstUtilAppUnInstall` aus einem Loader-Worker auf; Akeno entfernt nur den Ordner. Die Kachel
+  verschwindet, wenn ShadowMountPlus neu scannt.
+- **Web-Runtime ohne Direktstart.** ProsperoWeb nimmt keine Start-URL an; Akeno zeigt die Adresse und
+  einen QR-Code.
+- **Runtime-Argumente.** Nur MihawkOS dokumentiert `path=`; andere Runtimes werden ohne Datei geöffnet
+  und zeigen ihre eigene Bibliothek.
+- **GOG, Epic, itch.io-PC-Downloads** sind ohne Konto-Anbindung nur Entdecken-Einträge.
+- **GitHub-API-Limit.** RecompStore- und GitHub-Installationen lösen Assets über die öffentliche
+  GitHub-API auf (60 Anfragen pro Stunde und IP).
+- **Datei-Images.** `.ffpkg`/`.ffpfsc`-Listungen werden angezeigt, aber nicht installiert.
+- **Sprache.** Die Oberfläche ist Deutsch; Katalogtexte erscheinen in der Sprache der Entwickler.
+- **Bildschirmtastatur** ist Akenos eigene; das System-IME wird nicht verwendet.

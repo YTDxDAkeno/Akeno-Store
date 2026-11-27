@@ -1,18 +1,21 @@
 # Änderungen
 
-## 0.1.0 – Host-Entwicklungsbuild
+## 00.002.000 – Native PS5-Titel (27. November 2026)
 
-- Lokaler Hub mit Katalog, Bibliothek, Installationsaufträgen, Runtime- und Diagnoseinformationen.
-- GitHub-Releases über Atom, itch.io über öffentliches RSS und versionierte JSON-Kataloge.
-- Geprüfte ZIP-Installationen und Reparatur über atomaren Versionswechsel.
-- HTML5-Player, das Offline-Puzzle Signal Drift und eine lokale Kompatibilitätsdatenbank.
-- Reproduzierbarer Host-Build und automatisierte Tests.
+- Neuer nativer C++20-Hub (SDL2) mit dunkelblau-violettem Design, großen Covern, Hero-Banner,
+  Regalen, Store-Raster mit Filtern, Bildschirmtastatur, Detailseiten, QR-Codes, Toasts und
+  DualSense-Glyphen; identischer Code für Host und PS5.
+- PS5-Build mit öffentlichen Werkzeugen: signiertes `eboot.bin`, `libc.prx`, `sce_sys`,
+  Installations-ZIP `PPSA90410.zip`; GitHub-Actions-Artefakt.
+- Stores: vollständiger signierter ProsperoStore-Katalog (Ed25519, Rollback-Schutz), RecompStore
+  (GitHub-Digest), itch.io, Game Jolt, GOG, Epic.
+- Download-Manager und Installer mit SHA-256, ZIP-Prüfung, atomarem Tausch, Updates, automatischen
+  Updates, Deinstallation und Lauf-Schutz.
+- Runtime-Router für ROMs, Disc-Images, Windows-, Flash-, J2ME- und HTML5-Inhalte zu vorhandenen
+  PS5-Runtime-Titeln; Starts und Hauptmenü-Verknüpfungen über den ELF-Loader.
+- Audit der Codex-Basis ([docs/AUDIT.md](docs/AUDIT.md)); überholte PS5-Pipeline entfernt;
+  Python-Host nutzt jetzt ebenfalls den signierten Katalog.
 
-## Native SDL2 und Laufzeittests
+## 0.1.0 – Host-Entwicklungsbuild (Codex)
 
-- Native C-Oberfläche für Katalog und Bibliothek mit Tastatur- und Controllernavigation.
-- TSV-Export aus der vorhandenen Bibliothek und den gemeinsamen Store-Providern.
-- Cross-Compilation der SDL-Oberfläche zu ELF-Zielobjekten und Build-Wrapper für WSL.
-- Live-Metadaten aus GitHub und dem kuratierten ProsperoStore-Katalog.
-- Signaturbasierte Dateierkennung und beobachtete Runtime-Auswahl für vertrauenswürdige lokale Java- und Linux-Programme.
-- Host-Prozessüberwachung mit Zeitlimit, kontrolliertem Stopp, Fehlerstatus, Ausgabe und Safe Mode.
+- Lokaler Web-Hub mit Katalog, Bibliothek, HTML5-Player, Signal Drift und Kompatibilitätsdatenbank.

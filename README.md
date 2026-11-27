@@ -1,20 +1,62 @@
 # Akeno Gaming Hub – PS5 Edition
 
-Akeno bündelt Spielekatalog, Bibliothek, Paketinstallation und Laufzeiten. Für das PS5-Ziel entsteht eine native SDL2-Oberfläche. Der Linux-Entwicklungsbuild exportiert Katalog und Bibliothek für diese Oberfläche und startet lokale HTML5-Spiele in einer isolierten Browseransicht. Signal Drift ist ein mitgeliefertes, spielbares Puzzle für einen vollständigen Offline-Durchlauf. Der PS5-Zielbuild erzeugt ein gelinktes SDL2-Modul. Ein installierbares Konsolenpaket steht aus.
+**One Hub. Multiple Stores. Universal Gaming.**
 
-Der [native Build](BUILD.md#native-sdl-oberfläche) verwendet Katalogdaten und Bibliothek des Entwicklungs-Hubs. [PS5-Ziel und Konsolentests](platform/ps5/README.md)
+Akeno ist ein nativer Homebrew-Hub für die PS5: ein Katalog aus mehreren Stores, Downloads mit
+Prüfsummen, automatische Installation und Updates, eine Bibliothek, Hauptmenü-Verknüpfungen und
+gemeinsame Runtimes, die vorhandene PS5-Projekte (Emulatoren, Wine, Browser) nutzen, statt jedes Spiel
+einzeln zu portieren.
+
+![Entdecken](docs/media/discover.jpg)
+
+| Store | Was Akeno damit macht |
+| --- | --- |
+| [ProsperoStore](https://prosperostore.net) | Vollständiger, **Ed25519-signierter** Katalog (243 Apps): installieren, aktualisieren, entfernen |
+| [RecompStore](https://www.recompstore.com) | Recompilations und Ports, installiert über GitHub-Releases mit veröffentlichtem SHA-256; „bring your own disc" wird angezeigt |
+| itch.io, Game Jolt | Kostenlose Indie-Spiele; Browserspiele starten in der Web-Runtime (ProsperoWeb) |
+| GOG, Epic Games | Kostenlose PC-Spiele und Gratis-Aktionen zum Entdecken; Kauf/Download über das eigene Konto |
+| GitHub | Eigene Repositories mit PS5-Titel-ZIPs |
+
+Status nach Stufen: [STATUS.md](STATUS.md). Kurz: **kompiliert, gelinkt, signiert und paketiert** –
+auf einer echten PS5 noch nicht gestartet.
 
 ## Schnellstart
 
+PS5-Paket bauen (Linux/WSL, siehe [BUILD.md](BUILD.md)):
+
 ```sh
-python3 -m core.server --offline --data-dir /tmp/akeno-hub
+bash ps5/build.sh
 ```
 
-Öffne im Browser die beim Start ausgegebene lokale Adresse. Wähle **Signal Drift → Installieren → Spielen**. Falls du GitHub- und itch.io-Metadaten abrufen möchtest, starte ohne `--offline` und aktualisiere den Katalog. Eigene geprüfte Kataloge kannst du über `--manifest DATEI` einbinden.
+`ps5/dist/PPSA90410.zip` installieren und testen: [INSTALLATION.md](INSTALLATION.md).
 
-`make test` führt die Host-Tests aus. `make build` prüft den Build und erstellt ein portables Host-Quellpaket. Die Kommandos benötigen Python 3.12+, einen aktuellen Browser und GNU Make für die Make-Ziele.
+Auf dem Entwicklungsrechner dieselbe App starten:
 
-- [Build](BUILD.md) und [Installation](INSTALLATION.md)
-- [Architektur](ARCHITECTURE.md) und [Anbieter- und Runtime-Schnittstellen](docs/SDK.md)
-- [Recherche](RESEARCH.md) und [Kompatibilität](COMPATIBILITY.md)
-- [Sicherheit](SECURITY.md), [bekannte Einschränkungen](KNOWN_ISSUES.md) und [Entwicklungsstand](STATUS.md)
+```sh
+make native-run
+```
+
+## Aufbau
+
+| Pfad | Inhalt |
+| --- | --- |
+| `native/src/core` | JSON, SHA-256/Ed25519, Dateien, ZIP-Prüfung, Bilder |
+| `native/src/stores` | Provider und Zusammenführung der Kataloge |
+| `native/src/install` | Download-Manager, Installer, Bibliothek |
+| `native/src/runtime` | Formaterkennung, Runtime-Routing, Starts und Verknüpfungen |
+| `native/src/ui` | Oberfläche (SDL2) |
+| `native/src/platform` | Host (Linux, libcurl) und PS5 (`sceHttp`, Pfade, Loader) |
+| `ps5/` | PS5-Build: Toolchain, Titel-Runtime, SDL-Patches, Start-Payload, Kachel, `sce_sys` |
+| `core/`, `stores/`, `apps/ps5-hub/web` | Python-Host-Hub (Web-UI, HTML5-Player) |
+
+Weitere Dokumente: [Architektur](ARCHITECTURE.md) · [Stores](docs/STORES.md) ·
+[Runtimes](docs/RUNTIMES.md) · [Recherche](RESEARCH.md) · [Audit](docs/AUDIT.md) ·
+[Sicherheit](SECURITY.md) · [Bekannte Einschränkungen](KNOWN_ISSUES.md) · [Roadmap](ROADMAP.md)
+
+## Rechtliches
+
+Akeno-Code steht unter GPL-3.0-or-later ([LICENSE](LICENSE)); Drittkomponenten behalten ihre Lizenzen
+([THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md)). Keine Sony-SDK-Dateien, Firmware, Schlüssel oder
+geschützten Spieldaten. Recomps und Emulatoren benötigen eigene, rechtmäßig erstellte Dumps. Akeno
+umgeht keine Kaufprüfungen oder Server-Autorisierungen. PlayStation und PS5 sind Marken von Sony
+Interactive Entertainment; Akeno ist ein unabhängiges Projekt.

@@ -1,42 +1,49 @@
-# Verwaltete lokale Prozesse auf dem Entwicklungshost
+# Universelle Runtimes
 
-`runtimes.managed.ManagedRuntime` betreibt zwei Prozess-Backends für ausdrücklich ausgewählte lokale Programme. Sie laufen mit den Rechten des angemeldeten Linux-Benutzers. Verwende dafür ein Verzeichnis mit selbst erstellten oder von dir geprüften Dateien. Im SDK und in der CLI ist der Pfad zum vertrauenswürdigen Verzeichnis ein Pflichtargument. Browser und Store können diese Backends nicht aufrufen.
+Akeno portiert keine Spiele einzeln. Jede „Runtime" ist ein vorhandener PS5-Titel aus dem signierten
+ProsperoStore-Katalog. Akeno erkennt das Format eigener Dateien, wählt die passenden Runtime-Titel,
+installiert sie wie jeden anderen Titel und startet sie.
 
-| Backend | Voraussetzung | Prüfergebnis |
+## Erkennung (`native/src/runtime/runtimes.cpp`)
+
+Gelesen werden nur Dateiköpfe, nie ausgeführt. Beispiele: iNES-Kopf, N64-Byte-Order, Game-Boy-Prüfsumme,
+GBA-Header, NDS-Logo-Prüfsumme, GameCube/Wii-Disc-Magic, XDVDFS (Xbox, Xbox 360 XGD2/3),
+ISO 9660 mit `PLAYSTATION`-System und `BOOT2` (PS2) bzw. ohne (PS1), PSP-Volume, XCI/NSP, SWF, J2ME-Manifest,
+PE (x86/x86-64), ELF, Godot-PCK, Ren'Py, RPG-Maker-Projekte, HTML5-Exporte (Godot, Unity WebGL, Ren'Py).
+
+## Routing
+
+| Familie | Runtime-Titel (Reihenfolge) | Startargumente |
 | --- | --- | --- |
-| `java-21` | Java 21, ausführbares JAR mit Main-Class | Zwei unabhängig kompilierte Programme auf dem Linux-Host ausgeführt |
-| `java-17`, `java-25` | Passende lokal installierte Java-Version | Erkennung implementiert, Ausführung in dieser Umgebung offen |
-| `linux-elf` | Ausführbares ELF64 für die Architektur des Hosts, x86-64 oder AArch64 | Zwei kleine x86-64-Programme kompiliert und ausgeführt |
+| Web / HTML5, Unity WebGL, Godot Web, RPG Maker MV/MZ | ProsperoWeb `PRWB00001` | keine dokumentierte Start-URL → Akeno zeigt die Adresse (QR) |
+| Windows (PE) | MihawkOS `PPSA99170`, PC5 `PPSA11018`, Prospero Win `PPSA99995` | MihawkOS: `path=<Windows-Pfad>` (in `proton_launch.h` dokumentiert, Konsolentest offen) |
+| NES, SNES, GB/GBA, Mega Drive | RetroArch `PPSA99169`, Genesis Plus GX, Snes9x, fceuxs5 | keine (Runtime-eigene Bibliothek) |
+| N64 | Mupen64Plus `PPSA99064`, PSGopher, RetroArch | keine |
+| PS1 / PS2 / PSP | PSXS5, SwanStation / PS5SX2, Crux2 / PSP5 | keine |
+| GameCube/Wii, Dreamcast, Saturn | Porpoise, PSFlyCast, YmirPS5 | keine |
+| Xbox / Xbox 360 / Switch | XPSemu / PS5X360 / ProsperoEden | keine |
+| Flash, J2ME, PICO-8, C64 | Ruffle, Capy Mobile, PICO-8 for PS5, PS64 | keine |
 
-## Lokaler Aufruf
+Ohne PS5-Runtime im Katalog (Stand heute): allgemeine Java-Desktop-JARs (ProsperoCraft bringt Java 25
+nur für Minecraft mit), Linux-ELF, native Ren'Py/Godot/Unity-Builds, RPG Maker 2000/2003, .NET, Python,
+Lua/LÖVE. Akeno nennt dann die Alternative (Web-Export → ProsperoWeb, Windows-Build → MihawkOS).
 
-Weise `--trusted-root` ein bereits vorhandenes Verzeichnis zu. Der Einstiegspfad ist relativ zu diesem Verzeichnis. Das erste Kommando listet die auf diesem Rechner erkannten Backends auf.
+## Starten und Verknüpfungen
 
-```sh
-python3 -m runtimes.managed --trusted-root ./meine-programme
-python3 -m runtimes.managed --trusted-root ./meine-programme --timeout 180 java-21 Beispiel.jar
-python3 -m runtimes.managed --trusted-root ./meine-programme linux-elf Beispiel
-python3 -m runtimes.managed --trusted-root ./meine-programme --safe-mode
-```
+Ein Titel darf keinen anderen starten. Akeno schreibt deshalb `/data/akeno/launch/PPSA90410.txt`
+(`AKENO-LAUNCH 1`, Ziel-Title-ID, Argumente) und sendet `assets/payload/akeno-launch.elf` an den
+ELF-Loader auf Port 9021; die Payload wartet, bis Akeno geschlossen ist, und ruft
+`sceLncUtilLaunchApp` (Fallback `sceSystemServiceLaunchApp`) auf. Hauptmenü-Verknüpfungen sind kleine
+Titelordner `PPSA90500`–`PPSA90599` mit eigener Kachel, `forward.txt` und derselben Payload. Das Design
+stammt von den Forwarder-Kacheln von PS5_RetroArch und MihawkOS (GPL-3.0-or-later). Konsolentest offen.
 
-Mit `--java-home /pfad/zum/jdk` kannst du zusätzliche lokal geprüfte Java-Installationen angeben. Der Manager ermittelt die Version durch den Aufruf von `java -version`. `--disable java-21` sperrt ein einzelnes Backend für diesen Aufruf. `--safe-mode` schaltet alle Prozessstarts und JVM-Erkennungsaufrufe aus. Die Persistenz dieser Optionen liegt beim Aufrufer.
+## Eigene ROMs und ISOs
 
-## Prozesssteuerung und Beobachtungen
+Eigene, rechtmäßig erstellte Dumps gehören nach `/data/akeno/games` (oder `/mnt/usbN/akeno/games`).
+Recomps aus RecompStore nennen das benötigte Original (z. B. „US-Disc SLUS-21590"); die Einrichtung
+übernimmt das jeweilige Spiel. Akeno liefert keine geschützten Spieldaten.
 
-`run(backend, entry, timeout=120)` überwacht eine gestartete Prozessgruppe. Ein zweiter Start über denselben Manager wird während der Laufzeit abgelehnt. Der Aufrufer kann `status` lesen und aus einem anderen Thread mit `stop()` das Ende anfordern. Zeitlimit und Stop senden SIGTERM, nach einer halben Sekunde folgt bei Bedarf SIGKILL. Zurückbleibende Prozesse derselben Gruppe werden beim Ende des Hauptprozesses beendet.
+## Python-Host-Runner
 
-Das Ergebnis enthält Zustand, Exitcode, die letzten 8192 Ausgabebytes als Text und den höchsten beobachteten RSS-Wert des Hauptprozesses in KiB. Sehr kurze Programme können zwischen den Stichproben enden. Das Arbeitsverzeichnis ist das Verzeichnis der Startdatei. Konfiguration, Spielstände und die Lizenz des Programms liegen beim Benutzer. Der Manager bietet weder Betriebssystemisolierung noch eine Speicherobergrenze.
-
-```sh
-python3 -m unittest discover -s tests -p test_managed.py -v
-```
-
-Die Tests belegen Prozessausführung und Überwachung auf dem Host. Die Plattformadapter für Java und native Prozesse auf der PS5 sowie die Spiele- und Hardwareprüfung stehen aus.
-
-Mit `auto` statt einer Backend-ID kann der Supervisor für das ausgewählte Programm im vertrauenswürdigen Verzeichnis Java anhand der Klassenversion oder Linux ELF anhand von ABI, Architektur und bekannten Bibliotheken auswählen. Der Linker kann zur Laufzeit zusätzliche Bibliotheken verlangen.
-
-```sh
-python3 -m runtimes.managed --trusted-root /pfad/zu/eigenen-spielen auto spiel.jar
-```
-
-Die Host-Tests wurden mit Temurin 17.0.16, OpenJDK 21 und Temurin 25.0.1 durchgeführt. Jede Version hat zwei dafür kompilierte JARs gestartet. Der Test prüft auch, welche Java-Version `auto` für jede JAR auswählt. Über `AKENO_TEST_JAVA_HOMES` lassen sich zusätzliche JDK-Verzeichnisse als durch Doppelpunkte getrennte Liste angeben.
+`runtimes/managed.py` (Java 17/21/25, Linux-ELF auf dem Entwicklungsrechner) bleibt als Testwerkzeug
+erhalten; es hat keine Funktion auf der PS5.

@@ -1,41 +1,56 @@
 # Build und Tests
 
-Erforderlich sind Linux und Python 3.12 oder neuer. Die Laufzeit benötigt keine zusätzlichen Python-Bibliotheken. Die Make-Ziele setzen GNU Make voraus.
+## PS5-Titel (`PPSA90410`)
+
+Linux oder WSL (Ubuntu 24.04) mit Clang/LLD/LLVM 18, compiler-rt, CMake, Ninja, Python 3 mit Pillow,
+Git, curl, wget und unzip:
 
 ```sh
-make test
-make build
+sudo apt install clang-18 lld-18 llvm-18 libclang-rt-18-dev cmake ninja-build python3-pil git curl wget unzip make
+bash ps5/build.sh
 ```
 
-Der Build erzeugt `dist/akeno-gaming-hub-host.zip`. Bei identischen Eingabedateien und identischer ZIP-Komprimierungsimplementierung erzeugt er identische Bytes. Das ZIP enthält den lauffähigen Host-Quellcode. Entpacke es und starte `python3 -m core.server --offline` im enthaltenen Verzeichnis.
+Ergebnis: `ps5/dist/PPSA90410/` und `ps5/dist/PPSA90410.zip` (Titelordner oben im Archiv) sowie
+`ps5/dist/SHA256SUMS`. Der Build verwendet ausschließlich öffentliche Werkzeuge, alle gepinnt:
 
-Die Tests decken API, Katalog-Fixtures, echte Schleifenanfragen an einen HTTP-Testserver sowie Archiv- und Installationsfehler ab. Für manuelle Browserprüfung siehe [Installation](INSTALLATION.md). Für die Zielplattform siehe [PS5-Plattform](platform/ps5/README.md).
+| Schritt | Quelle | Prüfung |
+| --- | --- | --- |
+| Payload-SDK v0.42, `ps5-native-tool`, Clean-Room-`libc.prx` | [drakmor/ps5-native-app-boilerplate](https://github.com/drakmor/ps5-native-app-boilerplate) `470695e` | SDK-ZIP-SHA-256 im Boilerplate; `libc.prx`-SHA-256 `e6ff45d1…` = hardwaregetesteter Wert |
+| Titel-Runtime (Heap, `opendir`, `realpath`, `exit`, Threads) | [lowbit/ps5-openrct2](https://github.com/lowbit/ps5-openrct2) `e2d9a82`, in `ps5/runtime/` | unverändert übernommen |
+| SDL 2 | [ps5-payload-dev/SDL](https://github.com/ps5-payload-dev/SDL) `ee4c47dc` + `ps5/patches/sdl` | Archiv-SHA-256 oder Git-Commit-Hash |
+| zlib 1.3.2 (nur für das Host-Werkzeug) | zlib.net oder GitHub-Spiegel | SHA-256 `bb329a0a…` |
 
-Der optionale Browser-Smoke-Test benötigt Playwright für Python und Chromium. Mit einem installierten Chromium:
+`eboot.bin` und `libc.prx` werden mit `ps5-native-tool self --inspect` geprüft („integrity: valid").
+Systemmodule, die ein Spielprozess nicht lädt (`libScePosixForWebKit`, `libkernel_sys`,
+`libkernel_web`), sind vom Linken ausgeschlossen: Ein solcher Import bricht den Build ab, statt zur
+Laufzeit ins Leere zu springen.
 
-```sh
-CHROMIUM=/usr/bin/chromium python3 -m tools.browser_smoke
-```
-
-Der Test arbeitet in einem temporären Verzeichnis. Er installiert Signal Drift über die Oberfläche, öffnet es im Player, löst das Rätsel und entfernt das Spiel wieder.
-
-## Native SDL-Oberfläche
-
-Installiere einen C11-Compiler, GNU Make, pkg-config und SDL2-Entwicklungsdateien. Unter Debian oder Ubuntu heißen die Pakete `build-essential`, `pkg-config` und `libsdl2-dev`.
-
-```sh
-make native-test
-make native-catalog CATALOG_ARGS=--offline
-dist/native/akeno-hub dist/native/data/catalog.tsv dist/native/data/library.tsv
-```
-
-Der optionale Offline-Schalter überspringt öffentliche Feeds. Der Exporter übernimmt den lokalen Bibliotheksstand aus demselben `--data-dir` wie der Host-Hub. Er schreibt die verfügbaren Daten auch beim Ausfall eines einzelnen Providers und meldet diesen Fehler am Prozessende. Starte die SDL-Anwendung nach dem nächsten Export erneut, um die Daten neu zu laden.
-
-## PS5 und Windows
-
-Der [PS5-Build](platform/ps5/README.md) benötigt einen Zielcompiler und die Zielversion von SDL2. Ein Windows-PC kann denselben Build mit WSL ausführen. Gib eine vorhandene WSL-Distribution und den Checkout-Pfad innerhalb von WSL an.
+Unter Windows:
 
 ```powershell
-.\build\build-wsl.ps1 -Distribution Ubuntu -Checkout /mnt/c/repos/Akeno-Store
-.\build\build-wsl.ps1 -Distribution Ubuntu -Checkout /mnt/c/repos/Akeno-Store -Target ps5 -SdkConfig /opt/akeno/sdk.mk
+.\ps5\build-wsl.ps1 -Distribution Ubuntu-24.04 -Checkout /mnt/c/repos/Akeno-Store -Setup
+```
+
+Ohne `-Setup` baut der Aufruf nur. GitHub Actions (`.github/workflows/build.yml`) führt beide
+Testsuites aus und veröffentlicht `PPSA90410.zip` als Artefakt jedes Pushes.
+
+## Native App auf dem Host
+
+```sh
+sudo apt install libsdl2-dev libcurl4-openssl-dev
+make -C native test        # 333 Prüfungen des Kerns
+make -C native app         # native/build/host/akeno
+make -C native probe       # Live-Abfrage aller Stores
+make native-screenshots    # Screenshot-Durchlauf aller Ansichten (z. B. unter Xvfb)
+```
+
+`native/build/host/akeno-probe install:<TITLE-ID>` lädt einen Katalogtitel real herunter, prüft und
+installiert ihn in den simulierten Ordner.
+
+## Python-Host-Hub
+
+```sh
+make test     # native-test + Python-Tests
+make build    # dist/akeno-gaming-hub-host.zip (Quellpaket)
+AKENO_LIVE_STORES=prosperostore,itch python3 -m unittest discover -s tests -p test_stores_live.py -v
 ```

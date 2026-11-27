@@ -1,23 +1,57 @@
 # Entwicklungsstand
 
-Der lauffähige Host-Build verknüpft dynamische Kataloge, lokale Bibliothek, Paketinstallationen mit Prüfsummen und den isolierten HTML5-Player. GitHub wurde live abgerufen. Der itch.io-Abruf ist in der Cloud blockiert. Die Parser- und Paketläufe lassen sich mit `make test` wiederholen. In Chromium wurde Signal Drift über die Oberfläche installiert, im isolierten Player bis zum Sieg gespielt und deinstalliert.
+Stand 27. November 2026, Version `00.002.000` (Title-ID `PPSA90410`). Für diesen Stand stand
+**keine PS5** zur Verfügung. Alles unterhalb „Paketiert" ist daher offen, auch wenn Upstream-Projekte
+dieselben Bausteine auf ihrer Hardware belegt haben.
 
-PS5-Pakete, native Laufzeiten, DualSense auf der Konsole, externe Bibliothekskonten, Multiplayer und Recompilation haben keine Hardwarevalidierung und sind im aktuellen Build nicht verfügbar.
+Legende: ✅ erreicht · ⬜ offen · — nicht zutreffend
 
-## Native Entwicklung
+## Native PS5-App (`native/`, `ps5/`)
 
-| Stufe | Ergebnis |
+| Komponente | Implementiert | Kompiliert | Gelinkt | Paketiert | Auf PS5 gestartet | Spielbar / benutzbar | Online-MP verifiziert |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| Titelordner `PPSA90410` mit `eboot.bin` (FSELF, signiert, Integrität gültig), `sce_module/libc.prx`, `sce_sys/` | ✅ | ✅ | ✅ | ✅ | ⬜ | ⬜ | — |
+| Installations-ZIP `PPSA90410.zip` (Titelordner oben, wie ProsperoStore/ShadowMountPlus) | ✅ | — | — | ✅ | ⬜ | ⬜ | — |
+| Oberfläche (SDL2, 1920×1080, DualSense/Tastatur) | ✅ | ✅ | ✅ | ✅ | ⬜ | Host ✅ / PS5 ⬜ | — |
+| HTTPS über `sceHttp` (Konsole) / libcurl (Host) | ✅ | ✅ | ✅ | ✅ | ⬜ | Host ✅ / PS5 ⬜ | — |
+| ProsperoStore (signierter Index, Ed25519, Rollback-Schutz) | ✅ | ✅ | ✅ | ✅ | ⬜ | Host live ✅ | — |
+| RecompStore (GitHub-Asset mit Digest) | ✅ | ✅ | ✅ | ✅ | ⬜ | Host live: Katalog ✅, Auflösung ⬜ (GitHub-API in der Cloud gesperrt) | — |
+| itch.io, Game Jolt, GOG, Epic (Entdecken) | ✅ | ✅ | ✅ | ✅ | ⬜ | Host live ✅ | — |
+| Download-Manager + Installer (SHA-256, ZIP-Prüfung, atomarer Tausch) | ✅ | ✅ | ✅ | ✅ | ⬜ | Host live ✅ (DriftCheck, GyroAim real installiert) | — |
+| Updates, „Alle aktualisieren", automatische Updates | ✅ | ✅ | ✅ | ✅ | ⬜ | Host-Tests ✅ | — |
+| Deinstallation, Lauf-Schutz (`/mnt/sandbox`) | ✅ | ✅ | ✅ | ✅ | ⬜ | Host-Tests ✅ | — |
+| Titel starten (Payload über ELF-Loader 9021) | ✅ | ✅ | ✅ | ✅ | ⬜ | ⬜ | — |
+| Hauptmenü-Verknüpfungen (Kachel-Titel `PPSA905xx`) | ✅ | ✅ | ✅ | ✅ | ⬜ | ⬜ | — |
+| Engine-/Formaterkennung und Runtime-Routing | ✅ | ✅ | ✅ | ✅ | ⬜ | Host-Tests ✅ | — |
+
+## Spiele und Runtimes über Akeno
+
+Akeno installiert Titel aus den Katalogen. Ob ein Spiel startet oder online spielbar ist, belegen die
+jeweiligen Upstream-Projekte für ihre Firmware; **Akeno selbst hat kein Spiel auf einer PS5 gestartet.**
+
+| Beispiel | Über Akeno installierbar | Von Akeno auf PS5 gestartet | Upstream-Angabe |
+| --- | --- | --- | --- |
+| ProsperoCraft `PPSA99874` | ✅ (Host-Probe: Download-Daten aufgelöst) | ⬜ | Minecraft Java 26.x auf PS5, Microsoft-Konto oder Offline-Profil |
+| PokeMMO Prospero `PPSA98001` | ✅ (im signierten Katalog) | ⬜ | FW 12.40, Online-Login und Kämpfe laut README |
+| OpenRCT2 `PPSA99728` | ✅ (Host-Probe aufgelöst) | ⬜ | FW 13.00, 56–58 fps, eigene RCT2-Daten nötig |
+| MihawkOS, PC5, Prospero Win (Windows) | ✅ | ⬜ | Alpha, spielabhängig |
+| ProsperoWeb (HTML5/WebGL) | ✅ | ⬜ | FW 13.42 laut README |
+| RetroArch und Einzel-Emulatoren | ✅ | ⬜ | je Projekt |
+
+## Host-Entwicklungs-Hub (Python, `core/`, `stores/`, `apps/ps5-hub/web`)
+
+Weiterhin lauffähig: lokaler Web-Hub mit HTML5-Player, Signal Drift, geprüften ZIP-Installationen und
+Kompatibilitätsdatenbank. 52 Tests grün; ProsperoStore jetzt mit vollständigem signiertem Index.
+
+## Tests
+
+| Suite | Ergebnis |
 | --- | --- |
-| Host-UI | SDL2-Build, Renderer, TSV-Parser, Navigation und simulierte Controller-Eingabe geprüft |
-| PS5-Cross-Compilation | Beide C-Quellen mit den Zielheadern als x86-64-FreeBSD-ELF-Objekte kompiliert |
-| PS5-Link und Paketierung | Autorisiertes SDK für Startcode, Link und signierte Paketierung steht aus |
-| PS5-Installation, Start und Gameplay | Konsolenprüfung steht aus |
-| Lokale Runtimes | Je zwei eigens kompilierte Testprogramme mit Java 17, 21 und 25 sowie mit Linux ELF ausgeführt |
-| Katalog | GitHub-Releases und kuratierte ProsperoStore-Daten live geladen. itch.io in der Cloud blockiert |
-| WSL | Build-Wrapper enthalten. Windows-Ausführung steht aus |
+| `make -C native test` (C++-Kern, inkl. RFC-8032-Vektoren, echtem signiertem Katalog, Installer-Ende-zu-Ende mit Fake-Transport) | 333 Prüfungen, 0 Fehler |
+| `make -C native probe` (live, alle Stores) | 6/6 Stores, 412 Einträge, 256 installierbar |
+| Live-Installation auf dem Host (`akeno-probe install:PPSA98766 install:PPSA99510`) | beide installiert, Bibliothek erkennt sie |
+| `python3 -m unittest discover -s tests` | 52 Tests, 3 Live-Tests übersprungen |
+| Live: `AKENO_LIVE_STORES=prosperostore,itch` | grün |
+| `bash ps5/build.sh` | `eboot.bin` und `libc.prx` „integrity: valid", Payload besteht ProsperoStores Loader-ELF-Prüfung |
 
-Die native Oberfläche liest einen vom Host erzeugten Snapshot. Die Paketverwaltung läuft im Host-Hub. Native Konsolen-Runtimes, Spielinstallation auf PS5 und Registrierung im Hauptmenü brauchen weitere Integrationsarbeit. [PS5-Build und Konsolentests](platform/ps5/README.md)
-
-## Native Alpha 0.1.0
-
-Die SDL2-Anwendung wurde für den Ziel-Sysroot kompiliert und zu einem ELF64-DYN-Modul gelinkt. Suche, Plattformfilter und Bibliothek sind in der SDL-UI verfügbar. Die Release-Pipeline validiert den Ordner eines autorisierten SDK-Builds und erzeugt ein reproduzierbares ZIP mit Dateihashes. Der verwendete Testordner ist eine Fixture. Ein echtes Akeno-`eboot.bin`, Konsolenstart, Gameplay und Multiplayer stehen aus. [Build und Hardwareplan](platform/ps5/README.md)
+Nächster Schritt ist der Konsolentest nach [INSTALLATION.md](INSTALLATION.md#erster-test-auf-der-ps5).
