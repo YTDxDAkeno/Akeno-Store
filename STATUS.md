@@ -1,10 +1,17 @@
 # Entwicklungsstand
 
-Stand 27. November 2026, Version `00.002.000` (Title-ID `PPSA90410`). Für diesen Stand stand
+Stand 27. November 2026, Version `01.002.000` (Title-ID `PPSA90410`). Für diesen Stand stand
 **keine PS5** zur Verfügung. Alles unterhalb „Paketiert" ist daher offen, auch wenn Upstream-Projekte
 dieselben Bausteine auf ihrer Hardware belegt haben.
 
 Legende: ✅ erreicht · ⬜ offen · — nicht zutreffend
+
+**Erster Konsolentest (Nutzer, 27. November 2026):** Der Titel erschien im Hauptmenü, der Start
+endete mit **CE-107750-0**. Ursache im Build gefunden: Der gepinnte Modul-Konverter
+(Boilerplate `470695e`) legte das RELRO-Segment auf den Datei-Offset der GOT statt auf
+`.data.rel.ro`; Offset und Adresse waren bei 16-KiB-Seiten nicht kongruent. Behoben mit dem
+korrigierten Konverter aus ProsperoStore `0e1f031`; `ps5/tools/check-module.py` weist solche Module
+jetzt beim Build ab. Erneuter Konsolentest offen.
 
 ## Native PS5-App (`native/`, `ps5/`)
 

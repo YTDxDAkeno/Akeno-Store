@@ -1,7 +1,7 @@
 # Bekannte Einschränkungen
 
-- **Kein Konsolentest.** Der Titel ist gebaut, signiert und paketiert, aber nicht auf einer PS5
-  gestartet. Leistung des SDL-Software-Renderers bei 1080p, `sceHttp`, Installation, Starts und
+- **Konsolentest offen.** Der erste Start endete mit CE-107750-0 (fehlerhaftes RELRO-Segment, im
+  Build behoben); der Start mit dem korrigierten Paket ist noch nicht bestätigt. Leistung des SDL-Software-Renderers bei 1080p, `sceHttp`, Installation, Starts und
   Verknüpfungen sind auf der Konsole unbestätigt ([Testplan](INSTALLATION.md#erster-test-auf-der-ps5)).
 - **Große Installationen sind langsam.** Die Konsole drosselt Schreibzugriffe eines Titels nach einigen
   hundert MB auf rund 2 MB/s. ProsperoStore lagert das Entpacken in einen Loader-Worker aus; Akeno

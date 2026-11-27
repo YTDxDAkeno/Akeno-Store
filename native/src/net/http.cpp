@@ -9,7 +9,7 @@
 namespace akeno::net
 {
 
-const char *Client::user_agent() { return "AkenoGamingHub/00.002.000 (PS5 homebrew)"; }
+const char *Client::user_agent() { return "AkenoGamingHub/01.002.000 (PS5 homebrew)"; }
 
 void parse_headers(std::string_view block, std::map<std::string, std::string> &out, int *status)
 {

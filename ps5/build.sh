@@ -68,6 +68,8 @@ echo "==> [4/6] Linking and signing eboot.bin"
 mkdir -p "$build/tile"
 "$root/tools/ps5-cc" -std=gnu11 -O2 -c "$root/tile/main.c" -o "$build/tile/main.o"
 "$root/tools/ps5-link" "$build/tile/main.o" -o "$build/tile/eboot.elf"
+# Refuse modules the console could not map (this caught CE-107750-0 on the first build).
+python3 "$root/tools/check-module.py" "$build/eboot.elf" "$build/tile/eboot.elf"
 echo "==> [5/6] Launch payload"
 PS5_PAYLOAD_SDK="$sdk" "$sdk/bin/prospero-clang" -O2 -Wall -o "$build/akeno-launch.elf" "$root/payload/launch.c" \
     -lSceSystemService -lSceUserService
@@ -102,6 +104,10 @@ out = os.path.join(dist, title + ".zip")
 with zipfile.ZipFile(out + ".part", "w", zipfile.ZIP_DEFLATED, compresslevel=9) as archive:
     for folder, dirs, files in os.walk(root):
         dirs.sort()
+        # Directory entries carry 0777 too: the console starts only titles every user can read.
+        entry = zipfile.ZipInfo(os.path.relpath(folder, dist) + "/", date_time=(2026, 11, 27, 0, 0, 0))
+        entry.external_attr = (0o40777 << 16) | 0x10
+        archive.writestr(entry, b"")
         for name in sorted(files):
             path = os.path.join(folder, name)
             info = zipfile.ZipInfo(os.path.relpath(path, dist), date_time=(2026, 11, 27, 0, 0, 0))

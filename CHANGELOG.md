@@ -1,6 +1,13 @@
 # Änderungen
 
-## 00.002.000 – Native PS5-Titel (27. November 2026)
+## 01.002.000 – Korrektur nach dem ersten Konsolentest
+
+- Start schlug mit CE-107750-0 fehl: Das RELRO-Segment des Moduls hatte einen Datei-Offset, der nicht
+  zur Adresse passte (älterer Modul-Konverter). Korrigierter Konverter aus ProsperoStore `0e1f031`,
+  neue Build-Prüfung `ps5/tools/check-module.py`.
+- ZIP enthält Verzeichniseinträge mit Rechten `0777`; Version im Schema `01.xxx.xxx`.
+
+## 01.002.000 – Native PS5-Titel (27. November 2026)
 
 - Neuer nativer C++20-Hub (SDL2) mit dunkelblau-violettem Design, großen Covern, Hero-Banner,
   Regalen, Store-Raster mit Filtern, Bildschirmtastatur, Detailseiten, QR-Codes, Toasts und

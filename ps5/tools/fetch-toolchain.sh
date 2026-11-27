@@ -43,6 +43,26 @@ if [[ ! -f $zarchive ]] || ! echo "$zhash  $zarchive" | sha256sum --check --quie
 fi
 bash "$native/tools/setup-native-dependencies.sh" >/dev/null
 
+# The module converter at 470695e anchors the writable RELRO segment at the GOT's file offset.
+# A C++ program with .data.rel.ro then gets a LOAD whose file offset and address disagree at
+# the 16 KiB page size, and the console refuses to start it (CE-107750-0). The boilerplate
+# fixed this later; ProsperoStore carries the fixed converter (GPL-3.0-or-later, commit
+# 0e1f031). These four files replace the older ones, each checked by SHA-256.
+fixed=0e1f031889643130af0a617b58b684e9cbfa67af
+overlay() {
+    local file=$1 hash=$2 target="$native/tooling/native/$1"
+    if ! echo "$hash  $target" | sha256sum --check --quiet 2>/dev/null; then
+        curl -fsSL -o "$target.part" "https://raw.githubusercontent.com/darkxex/ProsperoStore/$fixed/tooling/native/$file"
+        echo "$hash  $target.part" | sha256sum --check --quiet
+        mv "$target.part" "$target"
+        rm -f "$native/build/host/ps5-native-tool"
+    fi
+}
+overlay sce_module_writer.cpp 30dacae8f192f2e9a81f7091c37bd5443f22c595a17e5506a13f7bce3c8cea75
+overlay sce_module_writer.hpp fbeec6a4a0e1e949342d943d0e0979a981a69dd33f88e86221f14ae9a0d19591
+overlay native_app_builder.cpp 0de3002b5148598ca739f84a6935146593858bc66382fa4baebea691625bd71c
+overlay self_container.cpp 3c028f6523b4c169e8b909cb2722187f13eea1487a5848c1d191693a854bb695
+
 sdk="$native/.deps/native/ps5-payload-sdk"
 zroot="$native/.deps/native/zlib/root"
 tool="$native/build/host/ps5-native-tool"
@@ -58,5 +78,5 @@ if [[ ! -f $native/runtime/libc.prx ]]; then
 fi
 (cd "$native/runtime" && sha256sum --check --strict --quiet libc.prx.sha256)
 echo "PS5 payload SDK: $sdk"
-echo "ps5-native-tool: $tool"
+echo "ps5-native-tool: $tool (module converter from ProsperoStore $fixed)"
 echo "libc.prx: $(sha256sum "$native/runtime/libc.prx" | cut -d' ' -f1) (matches the boilerplate's hardware-tested digest)"

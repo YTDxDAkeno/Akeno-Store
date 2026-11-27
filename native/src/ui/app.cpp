@@ -1956,7 +1956,7 @@ void App::draw_settings()
     gfx_.text("Über Akeno", about.x + 28, ay, 26, theme::text, Weight::Bold);
     ay += 48;
     const std::vector<std::pair<std::string, std::string>> facts = {
-        {"Version", "00.002.000 (Alpha)"},
+        {"Version", "01.002.000 (Alpha)"},
         {"Plattform", platform::name()},
         {"Netzwerk", http_->transport_name()},
         {"Daten", platform::data_dir()},
