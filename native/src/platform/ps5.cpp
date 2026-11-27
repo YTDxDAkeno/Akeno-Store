@@ -66,14 +66,15 @@ std::string cache_dir() { return fs::join(data_root, "cache"); }
 std::vector<InstallRoot> install_roots()
 {
     std::vector<InstallRoot> roots;
+    // Only folders that already exist: Akeno does not create folders on the user's drives.
+    // /data/homebrew is the default ShadowMountPlus folder and is created when /data is reachable.
     const auto add = [&](const std::string &path, const std::string &label) {
-        const std::string drive = fs::parent(path);
-        if (!fs::is_dir(drive))
-            return;
         if (!fs::is_dir(path))
-            fs::make_dirs(path);
-        roots.push_back({path, label, fs::is_dir(path) && fs::writable(path)});
+            return;
+        roots.push_back({path, label, fs::writable(path)});
     };
+    if (fs::is_dir("/data") && !fs::is_dir("/data/homebrew"))
+        fs::make_dirs("/data/homebrew");
     add("/data/homebrew", "Interner Speicher (/data/homebrew)");
     add("/mnt/ext0/homebrew", "Erweiterter Speicher (/mnt/ext0/homebrew)");
     add("/mnt/ext1/homebrew", "M.2-SSD (/mnt/ext1/homebrew)");

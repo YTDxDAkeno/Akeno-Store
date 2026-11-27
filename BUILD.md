@@ -38,7 +38,7 @@ Testsuites aus und veröffentlicht `PPSA90410.zip` als Artefakt jedes Pushes.
 
 ```sh
 sudo apt install libsdl2-dev libcurl4-openssl-dev
-make -C native test        # 333 Prüfungen des Kerns
+make -C native test        # 347 Prüfungen des Kerns
 make -C native app         # native/build/host/akeno
 make -C native probe       # Live-Abfrage aller Stores
 make native-screenshots    # Screenshot-Durchlauf aller Ansichten (z. B. unter Xvfb)

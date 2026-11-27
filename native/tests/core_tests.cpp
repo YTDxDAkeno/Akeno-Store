@@ -9,6 +9,7 @@
 #include "install/library.hpp"
 #include "net/http.hpp"
 #include "platform/platform.hpp"
+#include "runtime/launch.hpp"
 #include "runtime/runtimes.hpp"
 #include "stores/catalog.hpp"
 #include "stores/github.hpp"
@@ -438,6 +439,56 @@ static void test_runtime_detection()
     fs::remove_tree(fs::parent(dir));
 }
 
+static void test_shortcuts()
+{
+    const std::string dir = temp_dir("shortcut");
+    const std::string assets = fs::join(dir, "assets"), root = fs::join(dir, "data/homebrew");
+    fs::make_dirs(fs::join(assets, "tile"));
+    fs::make_dirs(fs::join(assets, "payload"));
+    fs::make_dirs(root);
+    fs::write_atomic(fs::join(assets, "tile/eboot.bin"), "SELF-tile");
+    fs::write_atomic(fs::join(assets, "tile/libc.prx"), "PRX");
+    std::string payload = std::string(64, '\0') + kLaunchSlotMarker + std::string(32, '\0');
+    fs::write_atomic(fs::join(assets, "payload/akeno-launch.elf"), payload);
+    ::setenv("AKENO_ASSETS", assets.c_str(), 1);
+
+    CHECK(patch_launch_slot(payload, "PPSA90500"));
+    CHECK(payload.find("PPSA90500") == 64 && payload.find(kLaunchSlotMarker) == std::string::npos);
+    std::string bad = payload;
+    CHECK(!patch_launch_slot(bad, "PPSA90500")); // marker already replaced
+
+    ShortcutSpec spec;
+    spec.name = "Mein Spiel";
+    spec.target = "PPSA99170";
+    spec.arguments = {"path=Z:\\data\\akeno\\games\\Spiel\\Game.exe"};
+    spec.icon.width = spec.icon.height = 4;
+    spec.icon.rgba.assign(16, 0xFF8844CCu);
+    std::string error;
+    const std::string tile = create_shortcut(spec, root, fs::join(dir, "receipts"), error);
+    CHECK(tile == "PPSA90500");
+    const std::string folder = fs::join(root, tile);
+    CHECK(fs::is_file(fs::join(folder, "eboot.bin")) && fs::is_file(fs::join(folder, "sce_module/libc.prx")) &&
+          fs::is_file(fs::join(folder, "akeno-launch.elf")));
+    ParamInfo info;
+    CHECK(parse_param_json(fs::read_file(fs::join(folder, "sce_sys/param.json")).value_or(""), info));
+    CHECK(info.title_id == tile && info.name == "Mein Spiel" && info.game);
+    const auto param = fs::read_file(fs::join(folder, "sce_sys/param.json")).value_or("");
+    CHECK(param.find("\"contentId\": \"UP9000-PPSA90500_00-AKENOSHORTCUT500\"") != std::string::npos);
+    CHECK(fs::read_file(fs::join(folder, "forward.txt")).value_or("") ==
+          "AKENO-LAUNCH 1\nPPSA99170\npath=Z:\\data\\akeno\\games\\Spiel\\Game.exe\n");
+    ui::Pixels icon;
+    CHECK(ui::decode_image(fs::read_file(fs::join(folder, "sce_sys/icon0.png")).value_or(""), 1024, 1024, icon));
+    CHECK(icon.width == 512 && icon.height == 512);
+    Library library(fs::join(dir, "receipts"));
+    const auto titles = library.scan({root});
+    CHECK(titles.size() == 1 && titles[0].shortcut && titles[0].managed);
+    CHECK(create_shortcut(spec, root, fs::join(dir, "receipts"), error) == "PPSA90501");
+    spec.target = "not-a-title";
+    CHECK(create_shortcut(spec, root, fs::join(dir, "receipts"), error).empty());
+    ::unsetenv("AKENO_ASSETS");
+    fs::remove_tree(fs::parent(dir));
+}
+
 int main()
 {
     platform::init();
@@ -449,6 +500,7 @@ int main()
     test_installer();
     test_merge();
     test_runtime_detection();
+    test_shortcuts();
     std::printf("%d checks, %d failures\n", checks, failures);
     return failures ? 1 : 0;
 }

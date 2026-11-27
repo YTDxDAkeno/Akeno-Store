@@ -21,7 +21,7 @@ Legende: ✅ erreicht · ⬜ offen · — nicht zutreffend
 | Updates, „Alle aktualisieren", automatische Updates | ✅ | ✅ | ✅ | ✅ | ⬜ | Host-Tests ✅ | — |
 | Deinstallation, Lauf-Schutz (`/mnt/sandbox`) | ✅ | ✅ | ✅ | ✅ | ⬜ | Host-Tests ✅ | — |
 | Titel starten (Payload über ELF-Loader 9021) | ✅ | ✅ | ✅ | ✅ | ⬜ | ⬜ | — |
-| Hauptmenü-Verknüpfungen (Kachel-Titel `PPSA905xx`) | ✅ | ✅ | ✅ | ✅ | ⬜ | ⬜ | — |
+| Hauptmenü-Verknüpfungen (Kachel-Titel `PPSA905xx`) | ✅ | ✅ | ✅ | ✅ | ⬜ | Host-Test (Ordner, `param.json`, Icon, `forward.txt`, Payload-Slot) ✅ / PS5 ⬜ | — |
 | Engine-/Formaterkennung und Runtime-Routing | ✅ | ✅ | ✅ | ✅ | ⬜ | Host-Tests ✅ | — |
 
 ## Spiele und Runtimes über Akeno
@@ -55,7 +55,7 @@ pixelgenaue Ecken) 16 ms pro Frame in allen Tabs, 20–23 ms auf textlastigen De
 
 | Suite | Ergebnis |
 | --- | --- |
-| `make -C native test` (C++-Kern, inkl. RFC-8032-Vektoren, echtem signiertem Katalog, Installer-Ende-zu-Ende mit Fake-Transport) | 333 Prüfungen, 0 Fehler |
+| `make -C native test` (C++-Kern, inkl. RFC-8032-Vektoren, echtem signiertem Katalog, Installer-Ende-zu-Ende mit Fake-Transport) | 347 Prüfungen, 0 Fehler |
 | `make -C native probe` (live, alle Stores) | 6/6 Stores, 412 Einträge, 256 installierbar |
 | Live-Installation auf dem Host (`akeno-probe install:PPSA98766 install:PPSA99510`) | beide installiert, Bibliothek erkennt sie |
 | `python3 -m unittest discover -s tests` | 52 Tests, 3 Live-Tests übersprungen |

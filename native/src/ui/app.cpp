@@ -688,8 +688,16 @@ void App::local_menu(const LocalGame &game)
                              spec.name = label;
                              spec.target = id;
                              spec.arguments = args;
-                             spec.icon.width = spec.icon.height = 2;
-                             spec.icon.rgba.assign(4, 0xFFF65C8Bu);
+                             // The tile shows the runtime's own icon (its installed sce_sys/icon0.png).
+                             for (const InstalledTitle &installed : installed_)
+                                 if (installed.title_id == id && !installed.icon_path.empty())
+                                     if (const auto png = fs::read_file(installed.icon_path, 8 * 1024 * 1024))
+                                         decode_image(*png, 512, 512, spec.icon);
+                             if (spec.icon.width == 0)
+                             {
+                                 spec.icon.width = spec.icon.height = 2;
+                                 spec.icon.rgba.assign(4, 0xFFF65C8Bu);
+                             }
                              std::string error;
                              const std::string tile = create_shortcut(
                                  spec, roots_[static_cast<std::size_t>(settings_.root)].path,

@@ -8,6 +8,7 @@
 #include "install/library.hpp"
 #include "platform/platform.hpp"
 
+#include <cstdlib>
 #include <cstring>
 
 namespace akeno
@@ -17,7 +18,10 @@ namespace
 // Files packaged in Akeno's own title folder.
 std::string asset(const std::string &relative)
 {
-    return platform::is_console() ? "/app0/assets/" + relative : std::string(AKENO_ASSET_DIR "/") + relative;
+    if (platform::is_console())
+        return "/app0/assets/" + relative;
+    const char *forced = std::getenv("AKENO_ASSETS");
+    return std::string(forced && *forced ? forced : AKENO_ASSET_DIR) + "/" + relative;
 }
 
 bool write_arguments(const std::string &path, const std::string &target, const std::vector<std::string> &arguments,
