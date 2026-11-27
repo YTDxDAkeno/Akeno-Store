@@ -27,6 +27,7 @@ extern "C"
     int sceHttpSetConnectTimeOut(int, std::uint32_t);
     int sceHttpSetSendTimeOut(int, std::uint32_t);
     int sceHttpSetRecvTimeOut(int, std::uint32_t);
+    int sceHttpSetResponseHeaderMaxSize(int, std::size_t);
     int sceHttpsEnableOption(int, std::uint32_t);
     int sceHttpCreateConnectionWithURL(int, const char *, int);
     int sceHttpDeleteConnection(int);
@@ -89,6 +90,17 @@ class SceHttpTransport final : public Transport
             rc = sceHttpSetSendTimeOut(h.tmpl, 15000000);
         if (rc >= 0)
             rc = sceHttpSetRecvTimeOut(h.tmpl, 30000000);
+        // GitHub's release redirects carry a long signed Location and large security headers;
+        // the default limit fails them with 0x80431073 (response header too large). Ask for
+        // 64 KiB, falling back to smaller limits if the console refuses a size.
+        if (rc >= 0)
+        {
+            int header_rc = -1;
+            for (std::size_t size : {std::size_t(64 * 1024), std::size_t(32 * 1024), std::size_t(16 * 1024)})
+                if ((header_rc = sceHttpSetResponseHeaderMaxSize(h.tmpl, size)) >= 0)
+                    break;
+            (void)header_rc; // a refused size keeps the default; the request still runs
+        }
         if (rc >= 0) // verify the peer, its host name and its validity dates
             rc = sceHttpsEnableOption(h.tmpl, 0x01 | 0x04 | 0x08 | 0x10 | 0x20 | 0x80);
         if (rc >= 0)
@@ -120,7 +132,7 @@ class SceHttpTransport final : public Transport
         const std::string length = out.header("content-length");
         const std::uint64_t total = length.empty() ? 0 : std::strtoull(length.c_str(), nullptr, 10);
         std::vector<char> buffer(128 * 1024);
-        while (rc >= 0 && out.status == 200)
+        while (rc >= 0 && (out.status == 200 || out.status == 206))
         {
             if (cancel && cancel->requested.load())
             {
@@ -145,7 +157,7 @@ class SceHttpTransport final : public Transport
             const std::string_view chunk(buffer.data(), static_cast<std::size_t>(got));
             if (sink)
             {
-                if (!sink(chunk, total))
+                if (!sink(chunk, total, out.status))
                 {
                     out.error = "The download could not be saved";
                     return out;
@@ -156,9 +168,17 @@ class SceHttpTransport final : public Transport
         }
         if (rc < 0 && out.error.empty())
         {
-            char message[96];
-            std::snprintf(message, sizeof message, "The console's HTTPS request failed (0x%08x)",
-                          static_cast<unsigned>(rc));
+            const unsigned code = static_cast<unsigned>(rc);
+            const char *what = code == 0x80431073u   ? "Antwort-Header zu groß"
+                               : code == 0x80431068u ? "Zeitüberschreitung"
+                               : code == 0x80431063u ? "Netzwerkfehler"
+                               : code == 0x80431064u ? "ungültige Server-Antwort"
+                               : code == 0x80431075u || (code & 0xFFFFF000u) == 0x80435000u
+                                   ? "TLS/Zertifikat – Datum und Uhrzeit der Konsole prüfen"
+                               : (code & 0xFFFF0000u) == 0x80436000u ? "Namensauflösung (DNS)"
+                                                                     : "HTTPS-Anfrage fehlgeschlagen";
+            char message[160];
+            std::snprintf(message, sizeof message, "%s (sceHttp 0x%08x)", what, code);
             out.error = message;
         }
         return out;

@@ -37,8 +37,9 @@ struct Response
     }
 };
 
-// Receives body chunks; return false to abort. `total` is Content-Length or 0.
-using Sink = std::function<bool(std::string_view chunk, std::uint64_t total)>;
+// Receives body chunks; return false to abort. `total` is Content-Length or 0 and `status`
+// the HTTP status of this response (200, or 206 for a range).
+using Sink = std::function<bool(std::string_view chunk, std::uint64_t total, int status)>;
 
 struct Cancel
 {
@@ -62,8 +63,10 @@ class Client
 
     Response get(const std::string &url, std::uint64_t limit = 8 * 1024 * 1024, Cancel *cancel = nullptr,
                  const std::vector<std::pair<std::string, std::string>> &headers = {});
+    // `offset` > 0 asks for the rest of the file (HTTP Range); the response is 206 when the
+    // server honours it and 200 (the whole file again) when it does not.
     Response download(const std::string &url, const Sink &sink, Cancel *cancel = nullptr,
-                      std::uint64_t limit = 8ull * 1024 * 1024 * 1024);
+                      std::uint64_t limit = 8ull * 1024 * 1024 * 1024, std::uint64_t offset = 0);
     const char *transport_name() const { return transport_->name(); }
 
     static const char *user_agent();

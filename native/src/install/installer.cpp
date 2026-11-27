@@ -16,6 +16,8 @@
 
 #include <cerrno>
 #include <chrono>
+#include <memory>
+#include <thread>
 #include <fcntl.h>
 #include <unistd.h>
 
@@ -253,15 +255,16 @@ bool Installer::do_install(Entry &entry, std::string &error)
             return false;
         }
 
-    // Download, hashing as the bytes arrive.
+    // Download, hashing as the bytes arrive. Up to three attempts; a later attempt continues
+    // after the bytes already saved (HTTP Range) and starts over if the server sends it all.
     const std::string archive = fs::join(job_dir, "download.zip");
-    const int file = ::open(archive.c_str(), O_WRONLY | O_CREAT | O_EXCL, 0666);
+    const int file = ::open(archive.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0666);
     if (file < 0)
     {
         error = "Die Download-Datei kann nicht angelegt werden";
         return false;
     }
-    Sha256 hash;
+    auto hash = std::make_unique<Sha256>();
     std::uint64_t received = 0;
     const auto started = std::chrono::steady_clock::now();
     auto last_report = started;
@@ -271,50 +274,90 @@ bool Installer::do_install(Entry &entry, std::string &error)
         job.title_id = game.title_id;
     });
     bool write_failed = false;
-    net::Response response = http_.download(
-        game.artifact_url,
-        [&](std::string_view chunk, std::uint64_t total) {
-            std::size_t put = 0;
-            while (put < chunk.size())
-            {
-                const ssize_t n = ::write(file, chunk.data() + put, chunk.size() - put);
-                if (n < 0)
+    net::Response response;
+    for (int attempt = 0; attempt < 3 && !entry.cancel->requested.load(); ++attempt)
+    {
+        if (attempt > 0)
+        {
+            update(id, [&](Job &job) { job.note = "Neuer Versuch " + std::to_string(attempt + 1) + " von 3"; });
+            std::this_thread::sleep_for(std::chrono::seconds(2 * attempt));
+        }
+        const std::uint64_t resume_at = received;
+        bool first_chunk = true;
+        response = http_.download(
+            game.artifact_url,
+            [&](std::string_view chunk, std::uint64_t total, int status) {
+                if (first_chunk)
                 {
-                    if (errno == EINTR)
-                        continue;
-                    write_failed = true;
-                    return false;
+                    first_chunk = false;
+                    if (resume_at > 0 && status != 206 && received == resume_at)
+                    {
+                        // The server ignored the range: start the file and the hash again.
+                        if (::ftruncate(file, 0) != 0 || ::lseek(file, 0, SEEK_SET) != 0)
+                        {
+                            write_failed = true;
+                            return false;
+                        }
+                        hash = std::make_unique<Sha256>();
+                        received = 0;
+                    }
                 }
-                put += static_cast<std::size_t>(n);
-            }
-            hash.update(chunk.data(), chunk.size());
-            received += chunk.size();
-            const auto now = std::chrono::steady_clock::now();
-            if (now - last_report > std::chrono::milliseconds(250))
-            {
-                last_report = now;
-                const double seconds = std::chrono::duration<double>(now - started).count();
-                update(id, [&](Job &job) {
-                    job.done = received;
-                    job.total = total ? total : game.size;
-                    job.bytes_per_second = seconds > 0 ? static_cast<double>(received) / seconds : 0;
-                });
-            }
-            return true;
-        },
-        entry.cancel.get(), game.size ? game.size + 1024 * 1024 : 8ull * 1024 * 1024 * 1024);
+                std::size_t put = 0;
+                while (put < chunk.size())
+                {
+                    const ssize_t n = ::write(file, chunk.data() + put, chunk.size() - put);
+                    if (n < 0)
+                    {
+                        if (errno == EINTR)
+                            continue;
+                        write_failed = true;
+                        return false;
+                    }
+                    put += static_cast<std::size_t>(n);
+                }
+                hash->update(chunk.data(), chunk.size());
+                received += chunk.size();
+                const auto now = std::chrono::steady_clock::now();
+                if (now - last_report > std::chrono::milliseconds(250))
+                {
+                    last_report = now;
+                    const double seconds = std::chrono::duration<double>(now - started).count();
+                    update(id, [&](Job &job) {
+                        job.done = received;
+                        job.total = game.size ? game.size : (total ? total + resume_at : 0);
+                        job.bytes_per_second = seconds > 0 ? static_cast<double>(received) / seconds : 0;
+                    });
+                }
+                return true;
+            },
+            entry.cancel.get(), game.size ? game.size + 1024 * 1024 : 8ull * 1024 * 1024 * 1024, resume_at);
+        const bool complete = response.error.empty() && (response.status == 200 || response.status == 206) &&
+                              (game.size == 0 || received == game.size);
+        if (complete || write_failed || entry.cancel->requested.load() ||
+            (response.error.empty() && response.status >= 400 && response.status < 500 && response.status != 408 &&
+             response.status != 429))
+            break;
+        platform::log("[install] attempt %d for %s ended at %llu bytes: HTTP %d %s", attempt + 1, game.id.c_str(),
+                      static_cast<unsigned long long>(received), response.status, response.error.c_str());
+    }
     ::fsync(file);
     ::close(file);
-    update(id, [&](Job &job) { job.done = received; });
-    if (!response.error.empty() || response.status != 200)
+    update(id, [&](Job &job) {
+        job.done = received;
+        job.note.clear();
+    });
+    if (!response.error.empty() || (response.status != 200 && response.status != 206) ||
+        (game.size && received != game.size))
     {
         error = write_failed ? "Der Download konnte nicht gespeichert werden (Speicher voll?)"
                 : !response.error.empty() ? response.error
-                                          : "Der Download antwortete mit HTTP " + std::to_string(response.status);
+                : response.status != 200 && response.status != 206
+                    ? "Der Download antwortete mit HTTP " + std::to_string(response.status)
+                    : "Der Download ist unvollständig (" + format_bytes(received) + " von " + format_bytes(game.size) + ")";
         return false;
     }
     update(id, [](Job &job) { job.state = JobState::Verifying; });
-    const std::string digest = hash.hex();
+    const std::string digest = hash->hex();
     if (!digest_equal(digest, game.sha256))
     {
         error = "SHA-256 stimmt nicht: Der Download entspricht nicht dem Katalog. Nichts wurde installiert.";

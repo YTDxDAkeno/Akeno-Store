@@ -101,12 +101,15 @@ Response Client::get(const std::string &url, std::uint64_t limit, Cancel *cancel
     return follow(request, Sink(), cancel);
 }
 
-Response Client::download(const std::string &url, const Sink &sink, Cancel *cancel, std::uint64_t limit)
+Response Client::download(const std::string &url, const Sink &sink, Cancel *cancel, std::uint64_t limit,
+                          std::uint64_t offset)
 {
     Request request;
     request.url = url;
     request.limit = limit;
     request.headers.emplace_back("Accept", "application/octet-stream");
+    if (offset > 0)
+        request.headers.emplace_back("Range", "bytes=" + std::to_string(offset) + "-");
     return follow(request, sink, cancel);
 }
 

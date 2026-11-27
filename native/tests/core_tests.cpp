@@ -272,6 +272,9 @@ class FakeTransport final : public net::Transport
   public:
     std::map<std::string, std::string> bodies;
     std::map<std::string, std::string> redirects;
+    std::size_t fail_after = 0;  // the next transfer breaks off after this many bytes (once)
+    bool honour_range = true;
+    int calls = 0;
     const char *name() const override { return "fake"; }
     net::Response send(const net::Request &request, const net::Sink &sink, net::Cancel *) override
     {
@@ -288,14 +291,23 @@ class FakeTransport final : public net::Transport
             response.status = 404;
             return response;
         }
+        ++calls;
+        std::size_t start = 0;
         response.status = 200;
-        for (std::size_t at = 0; at < it->second.size(); at += 1000)
+        for (const auto &[name, value] : request.headers)
+            if (name == "Range" && honour_range)
+            {
+                start = std::strtoull(value.c_str() + 6, nullptr, 10);
+                response.status = 206;
+            }
+        const std::size_t stop = fail_after ? std::min(it->second.size(), start + fail_after) : it->second.size();
+        for (std::size_t at = start; at < stop; at += 1000)
         {
-            const std::string_view chunk = std::string_view(it->second).substr(at, 1000);
+            const std::string_view chunk = std::string_view(it->second).substr(at, std::min<std::size_t>(1000, stop - at));
             response.bytes += chunk.size();
             if (sink)
             {
-                if (!sink(chunk, it->second.size()))
+                if (!sink(chunk, it->second.size() - start, response.status))
                 {
                     response.error = "sink refused";
                     return response;
@@ -303,6 +315,11 @@ class FakeTransport final : public net::Transport
             }
             else
                 response.body.append(chunk);
+        }
+        if (fail_after)
+        {
+            fail_after = 0;
+            response.error = "connection reset";
         }
         return response;
     }
@@ -335,6 +352,7 @@ static void test_installer()
                                                 {"PPSA77777/sce_sys/param.json", kParam},
                                                 {"PPSA77777/sce_module/libc.prx", "PRX"}});
     auto transport = std::make_unique<FakeTransport>();
+    FakeTransport *fake = transport.get();
     transport->redirects["https://github.com/o/r/releases/download/v1/PPSA77777.zip"] =
         "https://release-assets.githubusercontent.com/blob";
     transport->bodies["https://release-assets.githubusercontent.com/blob"] = zip;
@@ -377,6 +395,17 @@ static void test_installer()
     // Reinstall (update path) keeps the previous version aside.
     CHECK(wait_for(installer, installer.install(game, root), state) && state == JobState::Done);
     CHECK(fs::is_dir(fs::join(Installer::work_dir_for(root), "previous/PPSA77777")));
+
+    // A transfer that breaks off is continued with a range request and still verifies.
+    fake->fail_after = 250;
+    const int before = fake->calls;
+    CHECK(wait_for(installer, installer.install(game, root), state) && state == JobState::Done);
+    CHECK(fake->calls == before + 2);
+    // A server that ignores the range sends everything again; the hash starts over.
+    fake->fail_after = 250;
+    fake->honour_range = false;
+    CHECK(wait_for(installer, installer.install(game, root), state) && state == JobState::Done);
+    fake->honour_range = true;
 
     titles = library.scan({root});
     CHECK(wait_for(installer, installer.uninstall(titles.at(0)), state) && state == JobState::Done);

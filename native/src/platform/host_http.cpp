@@ -60,11 +60,11 @@ size_t on_body(char *data, size_t size, size_t count, void *opaque)
         return 0;
     }
     transfer.response->bytes += bytes;
-    if (transfer.response->status != 200)
+    if (transfer.response->status != 200 && transfer.response->status != 206)
         return bytes; // redirect and error bodies are discarded
     if (transfer.sink && *transfer.sink)
     {
-        if (!(*transfer.sink)(std::string_view(data, bytes), transfer.total))
+        if (!(*transfer.sink)(std::string_view(data, bytes), transfer.total, transfer.response->status))
         {
             transfer.sink_refused = true;
             return 0;
