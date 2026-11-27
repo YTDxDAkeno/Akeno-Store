@@ -2,3 +2,7 @@ __pycache__/
 *.py[cod]
 /dist/
 /.cache/
+/native/build/
+/ps5/.deps/
+/ps5/build/
+/ps5/dist/
