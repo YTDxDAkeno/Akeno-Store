@@ -478,6 +478,32 @@ static void test_runtime_detection()
     CHECK(rm.playable && runtime_integrated("easyrpg"));
 #endif
     CHECK(!runtime_integrated("windows") && runtime_by_id("java") && runtime_by_id("html5"));
+    // Own dumps carry their identity: N64 header title and code (z64 order and byte-swapped v64).
+    std::string n64(0x40, '\0');
+    n64.replace(0, 4, std::string("\x80\x37\x12\x40", 4));
+    n64.replace(0x20, 10, "CONKER BFD");
+    n64.replace(0x3B, 4, "NFUE");
+    const Detection conker = detect_game(write("conker.z64", n64));
+    CHECK(conker.platform == "n64" && conker.game_title == "CONKER BFD" && conker.game_id == "NFUE");
+    std::string v64 = n64;
+    for (std::size_t i = 0; i + 1 < v64.size(); i += 2)
+        std::swap(v64[i], v64[i + 1]);
+    CHECK(detect_game(write("conker.v64", v64)).game_title == "CONKER BFD");
+    const std::vector<std::string> ports = {
+        "conker's bad fur day recompiled your own copy of conker's bad fur day (nintendo 64, us), as a .z64 file",
+        "wave race 64 recompiled native ps5 port of wave race 64 (n64)",
+        "grand theft auto: vice city stories your own gta vcs for the ps2 (usa, slus-21590)"};
+    const auto found = match_ports(conker, ports);
+    CHECK(!found.empty() && found[0].index == 0);
+    Detection vcs;
+    vcs.platform = "ps2";
+    vcs.game_id = "SLUS-21590";
+    const auto disc = match_ports(vcs, ports);
+    CHECK(!disc.empty() && disc[0].index == 2 && disc[0].score >= 100);
+    Detection other;
+    other.platform = "gba";
+    other.game_title = "POKEMON EMER";
+    CHECK(match_ports(other, ports).empty());
     for (const RuntimeInfo &info : akeno_runtimes())
         CHECK(*info.basis && *info.detail); // every runtime names what it builds on and its state
     CHECK(scan_local_games({dir}).size() >= 7);

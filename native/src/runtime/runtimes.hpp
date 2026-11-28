@@ -45,7 +45,21 @@ struct Detection
     std::string root;        // for folders: where the game itself starts (e.g. the folder with RPG_RT.ldb)
     bool playable = false;   // that runtime is integrated in this build
     std::string advice;      // when not playable: why, and what is missing
+    // Own dumps: what the header says, so Akeno can find the native port or recompilation
+    // that takes this original.
+    std::string platform;   // n64, gamecube, wii, ps2, psx, psp, gba, nds, xbox, xbox360, switch, nes, snes ...
+    std::string game_id;    // N64/GBA/NDS game code, GameCube/Wii ID, PS1/PS2/PSP serial (SLUS-21590)
+    std::string game_title; // the title stored in the header, when there is one
 };
+
+// Recomp/port entries in the catalog that name this original (platform + title or serial),
+// best first. `texts` are the candidates' name, needs and description, lower case.
+struct PortCandidate
+{
+    std::size_t index;
+    int score;
+};
+std::vector<PortCandidate> match_ports(const Detection &dump, const std::vector<std::string> &texts);
 
 // Reads only file headers and folder layouts (never executes anything).
 Detection detect_game(const std::string &path);

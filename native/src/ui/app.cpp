@@ -1082,6 +1082,35 @@ void App::local_menu(const LocalGame &game)
                                  add_shortcut(*profile);
                          }});
     }
+    else if (!d.platform.empty())
+    {
+        // An own dump: offer the native port or recompilation that takes this original.
+        if (!d.game_title.empty() || !d.game_id.empty())
+            text += "\nIm Header: " + d.game_title + (d.game_id.empty() ? "" : " (" + d.game_id + ")");
+        std::vector<std::size_t> candidates;
+        std::vector<std::string> texts;
+        for (std::size_t i = 0; i < games_.size(); ++i)
+        {
+            const Game &g = games_[i];
+            if (g.access != Access::Install || g.runtime != "native")
+                continue;
+            candidates.push_back(i);
+            texts.push_back(lower(g.title + " " + g.needs + " " + g.description));
+        }
+        const auto ports = match_ports(d, texts);
+        for (std::size_t k = 0; k < ports.size() && k < 3; ++k)
+        {
+            const int index = static_cast<int>(candidates[ports[k].index]);
+            const Game &port = games_[static_cast<std::size_t>(index)];
+            text += "\nPassender PS5-Port: " + port.title + (port.needs.empty() ? "" : " – benötigt: " + port.needs);
+            items.push_back({(installed_for(port) ? "Port öffnen: " : "Port ansehen: ") + port.title,
+                             [this, index] { open_detail(index); }});
+        }
+        if (ports.empty())
+            text += "\nKein passender Port im Katalog. " + d.advice;
+        else
+            text += "\nDer Port liest dein Original selbst ein; wohin es gehört, steht in seiner Beschreibung.";
+    }
     else
         text += "\n" + (d.advice.empty() ? std::string("Für dieses Format ist keine Akeno-Runtime vorgesehen.") : d.advice);
     items.push_back({"Schließen", [] {}});

@@ -5,6 +5,8 @@
 #include "core/fs.hpp"
 #include "core/util.hpp"
 
+#include <algorithm>
+#include <cctype>
 #include <cstdint>
 #include <cstring>
 #include <fcntl.h>
@@ -118,7 +120,48 @@ Detection match(const char *engine, const char *runtime, const char *format, con
     return d;
 }
 
-Detection rom(const char *system, const char *evidence) { return match("rom", "retro", system, evidence); }
+Detection rom(const char *system, const char *evidence, const char *platform = "")
+{
+    Detection d = match("rom", "retro", system, evidence);
+    d.platform = platform;
+    return d;
+}
+
+std::string printable(const std::string &raw)
+{
+    std::string out;
+    for (char c : raw)
+    {
+        if (c == '\0')
+            break;
+        out += (static_cast<unsigned char>(c) >= 0x20 && static_cast<unsigned char>(c) < 0x7f) ? c : ' ';
+    }
+    return trim(out);
+}
+
+// "cdrom0:\SLUS_215.90;1" in SYSTEM.CNF -> "SLUS-21590".
+std::string disc_serial(const std::string &area)
+{
+    for (const char *key : {"BOOT2", "BOOT"})
+    {
+        std::size_t at = area.find(key);
+        while (at != std::string::npos)
+        {
+            const std::size_t slash = area.find('\\', at);
+            if (slash != std::string::npos && slash - at < 32 && slash + 12 <= area.size())
+            {
+                std::string serial;
+                for (std::size_t i = slash + 1; i < area.size() && serial.size() < 12 && area[i] != ';'; ++i)
+                    if (std::isalnum(static_cast<unsigned char>(area[i])))
+                        serial += static_cast<char>(std::toupper(static_cast<unsigned char>(area[i])));
+                if (serial.size() == 9 && std::isalpha(static_cast<unsigned char>(serial[0])))
+                    return serial.substr(0, 4) + "-" + serial.substr(4);
+            }
+            at = area.find(key, at + 1);
+        }
+    }
+    return {};
+}
 
 // The folder (this one or up to three levels below) that holds RPG_RT.ldb.
 std::string rpgmaker_root(const std::string &path, int depth = 0)
@@ -143,11 +186,27 @@ Detection detect_file(const std::string &path)
 
     // Cartridge ROMs: header magic or checksums, not only the extension.
     if (head.size() >= 4 && head.compare(0, 4, "NES\x1a") == 0)
-        return rom("NES ROM (iNES)", "iNES-Kopf");
-    if ((ext == ".z64" || ext == ".n64" || ext == ".v64") && head.size() >= 4 &&
+        return rom("NES ROM (iNES)", "iNES-Kopf", "nes");
+    if ((ext == ".z64" || ext == ".n64" || ext == ".v64") && head.size() >= 0x40 &&
         (head.compare(0, 4, "\x80\x37\x12\x40") == 0 || head.compare(0, 4, "\x37\x80\x40\x12") == 0 ||
          head.compare(0, 4, "\x40\x12\x37\x80") == 0))
-        return rom("Nintendo 64 ROM", "N64-Byte-Order-Signatur");
+    {
+        // Bring the header to big-endian (.z64) order to read its title and game code.
+        std::string h = head.substr(0, 0x40);
+        if (head[0] == '\x37')
+            for (std::size_t i = 0; i + 1 < h.size(); i += 2)
+                std::swap(h[i], h[i + 1]);
+        else if (head[0] == '\x40')
+            for (std::size_t i = 0; i + 3 < h.size(); i += 4)
+            {
+                std::swap(h[i], h[i + 3]);
+                std::swap(h[i + 1], h[i + 2]);
+            }
+        Detection d = rom("Nintendo 64 ROM", "N64-Byte-Order-Signatur", "n64");
+        d.game_title = printable(h.substr(0x20, 20));
+        d.game_id = printable(h.substr(0x3B, 4));
+        return d;
+    }
     if ((ext == ".gb" || ext == ".gbc") && head.size() >= 0x150)
     {
         unsigned sum = 0;
@@ -157,32 +216,48 @@ Detection detect_file(const std::string &path)
             return rom(u8(0x143) & 0x80 ? "Game Boy Color ROM" : "Game Boy ROM", "Header-Prüfsumme");
     }
     if (ext == ".gba" && head.size() >= 0xC0 && u8(0xB2) == 0x96)
-        return rom("Game Boy Advance ROM", "GBA-Header");
+    {
+        Detection d = rom("Game Boy Advance ROM", "GBA-Header", "gba");
+        d.game_title = printable(head.substr(0xA0, 12));
+        d.game_id = printable(head.substr(0xAC, 4));
+        return d;
+    }
     if ((ext == ".sfc" || ext == ".smc"))
-        return rom("Super Nintendo ROM", "Dateityp .sfc/.smc");
+        return rom("Super Nintendo ROM", "Dateityp .sfc/.smc", "snes");
     if (ext == ".md" || ext == ".gen" || ext == ".smd")
         return rom("Mega Drive ROM", "Dateityp");
     if (ext == ".nds" && head.size() >= 0x160 && u8(0x15C) == 0x56 && u8(0x15D) == 0xCF)
-        return rom("Nintendo DS ROM", "NDS-Logo-Prüfsumme");
+    {
+        Detection d = rom("Nintendo DS ROM", "NDS-Logo-Prüfsumme", "nds");
+        d.game_title = printable(head.substr(0, 12));
+        d.game_id = printable(head.substr(0x0C, 4));
+        return d;
+    }
     if (ext == ".pce")
         return rom("PC Engine HuCard", "Dateityp");
     if (ext == ".a26" || ext == ".a78" || ext == ".lnx")
         return rom("Atari ROM", "Dateityp");
     if (ext == ".cso" || (ext == ".iso" && read_at(path, 0x8000 + 8, 8) == "PSP GAME"))
-        return rom("PSP-Image", "PSP-Volume-Kennung");
+        return rom("PSP-Image", "PSP-Volume-Kennung", "psp");
     if (ext == ".iso" || ext == ".gcm" || ext == ".rvz" || ext == ".wbfs")
     {
-        if (head.size() >= 0x20 && le32(head, 0x1C) == 0x3D9F33C2u)
-            return rom("GameCube-Disc-Image", "GameCube-Disc-Header");
-        if (head.size() >= 0x1C && le32(head, 0x18) == 0xA39E1C5Du)
-            return rom("Wii-Disc-Image", "Wii-Disc-Header");
+        const bool cube = head.size() >= 0x20 && le32(head, 0x1C) == 0x3D9F33C2u;
+        const bool wii = !cube && head.size() >= 0x1C && le32(head, 0x18) == 0xA39E1C5Du;
+        if (cube || wii)
+        {
+            Detection d = cube ? rom("GameCube-Disc-Image", "GameCube-Disc-Header", "gamecube")
+                               : rom("Wii-Disc-Image", "Wii-Disc-Header", "wii");
+            d.game_id = printable(head.substr(0, 6));
+            d.game_title = printable(head.substr(0x20, 64));
+            return d;
+        }
         if (ext == ".rvz" || ext == ".wbfs")
             return rom("GameCube/Wii-Image", "Dateityp");
         if (read_at(path, 0xFD90000 + 0x10000, 20) == "MICROSOFT*XBOX*MEDIA" ||
             read_at(path, 0x2080000 + 0x10000, 20) == "MICROSOFT*XBOX*MEDIA")
-            return rom("Xbox-360-Disc-Image (XGD2/XGD3)", "XDVDFS-Volume im Spielbereich");
+            return rom("Xbox-360-Disc-Image (XGD2/XGD3)", "XDVDFS-Volume im Spielbereich", "xbox360");
         if (read_at(path, 32 * 2048, 20) == "MICROSOFT*XBOX*MEDIA")
-            return rom("Xbox-Disc-Image (XDVDFS)", "XDVDFS-Volume");
+            return rom("Xbox-Disc-Image (XDVDFS)", "XDVDFS-Volume", "xbox");
         const std::string pvd = read_at(path, 16 * 2048, 2048);
         if (pvd.size() > 40 && pvd.compare(1, 5, "CD001") == 0)
         {
@@ -191,9 +266,12 @@ Detection detect_file(const std::string &path)
             {
                 // PS2 discs carry SYSTEM.CNF with BOOT2; PS1 with BOOT. Read the root names only.
                 const std::string area = read_at(path, 0, 2 * 1024 * 1024);
-                if (area.find("BOOT2") != std::string::npos)
-                    return rom("PlayStation-2-Disc-Image", "ISO 9660 + SYSTEM.CNF BOOT2");
-                return rom("PlayStation-Disc-Image", "ISO 9660 System PLAYSTATION");
+                Detection d = area.find("BOOT2") != std::string::npos
+                                  ? rom("PlayStation-2-Disc-Image", "ISO 9660 + SYSTEM.CNF BOOT2", "ps2")
+                                  : rom("PlayStation-Disc-Image", "ISO 9660 System PLAYSTATION", "psx");
+                d.game_id = disc_serial(area);
+                d.game_title = printable(pvd.substr(40, 32)); // the volume identifier
+                return d;
             }
             return rom("ISO-9660-Image (unbekanntes System)", "ISO 9660");
         }
@@ -203,11 +281,11 @@ Detection detect_file(const std::string &path)
     if (ext == ".gdi" || ext == ".cdi")
         return rom("Dreamcast-Image", "Dateityp");
     if (ext == ".xci" && head.size() >= 0x104 && head.compare(0x100, 4, "HEAD") == 0)
-        return rom("Switch-Cartridge-Image", "XCI-Header");
+        return rom("Switch-Cartridge-Image", "XCI-Header", "switch");
     if (ext == ".nsp" && head.compare(0, 4, "PFS0") == 0)
-        return rom("Switch-Paket", "PFS0-Header");
+        return rom("Switch-Paket", "PFS0-Header", "switch");
     if (ext == ".xex")
-        return rom("Xbox-360-Titel", "Dateityp");
+        return rom("Xbox-360-Titel", "Dateityp", "xbox360");
     if (ext == ".swf" && head.size() >= 3 &&
         (head.compare(0, 3, "FWS") == 0 || head.compare(0, 3, "CWS") == 0 || head.compare(0, 3, "ZWS") == 0))
         return match("flash", "", "Flash-Film (SWF)", "SWF-Signatur", "Adobe Flash");
@@ -313,6 +391,98 @@ Detection detect_game(const std::string &path)
                 return d;
         }
     return {};
+}
+
+namespace
+{
+
+// Words the catalog uses for each platform.
+std::vector<std::string> platform_words(const std::string &platform)
+{
+    if (platform == "n64")
+        return {"n64", "nintendo 64", ".z64"};
+    if (platform == "gamecube")
+        return {"gamecube", "gcn"};
+    if (platform == "wii")
+        return {"wii"};
+    if (platform == "ps2")
+        return {"ps2", "playstation 2"};
+    if (platform == "psx")
+        return {"ps1", "psx", "playstation"};
+    if (platform == "psp")
+        return {"psp", "ulus", "ules"};
+    if (platform == "gba")
+        return {"gba", "game boy advance"};
+    if (platform == "nds")
+        return {"nds", "nintendo ds"};
+    if (platform == "xbox360")
+        return {"xbox 360", "xbox360"};
+    if (platform == "xbox")
+        return {"original xbox", "xbox version", "(xbox)", "xbox"};
+    if (platform == "switch")
+        return {"switch"};
+    if (platform == "snes")
+        return {"snes", "super nintendo"};
+    if (platform == "nes")
+        return {"nes"};
+    return {};
+}
+
+std::vector<std::string> title_words(const std::string &title)
+{
+    static const char *ignore[] = {"the", "and", "for", "game", "version", "disc", "edition"};
+    std::vector<std::string> words;
+    std::string word;
+    for (char c : lower(title) + " ")
+    {
+        if (std::isalnum(static_cast<unsigned char>(c)))
+            word += c;
+        else if (!word.empty())
+        {
+            bool skip = word.size() < 3;
+            for (const char *w : ignore)
+                skip = skip || word == w;
+            if (!skip)
+                words.push_back(word);
+            word.clear();
+        }
+    }
+    return words;
+}
+
+} // namespace
+
+std::vector<PortCandidate> match_ports(const Detection &dump, const std::vector<std::string> &texts)
+{
+    std::vector<PortCandidate> out;
+    if (dump.platform.empty())
+        return out;
+    const auto platform = platform_words(dump.platform);
+    const auto words = title_words(dump.game_title);
+    std::string serial = lower(dump.game_id);
+    std::string compact = serial;
+    compact.erase(std::remove(compact.begin(), compact.end(), '-'), compact.end());
+    for (std::size_t i = 0; i < texts.size(); ++i)
+    {
+        const std::string &text = texts[i];
+        int score = 0;
+        if (serial.size() >= 9 && (text.find(serial) != std::string::npos || text.find(compact) != std::string::npos))
+            score += 100; // the catalog names this exact disc
+        bool on_platform = false;
+        for (const std::string &w : platform)
+            on_platform = on_platform || text.find(w) != std::string::npos;
+        if (!on_platform && score == 0)
+            continue;
+        int hits = 0;
+        for (const std::string &w : words)
+            hits += text.find(w) != std::string::npos;
+        if (hits > 0)
+            score += 10 * hits + (on_platform ? 5 : 0);
+        if (score >= 15)
+            out.push_back({i, score});
+    }
+    std::sort(out.begin(), out.end(), [](const PortCandidate &a, const PortCandidate &b) { return a.score > b.score; });
+    return out;
 }
 
 std::vector<LocalGame> scan_local_games(const std::vector<std::string> &folders)
