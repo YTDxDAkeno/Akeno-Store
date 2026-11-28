@@ -33,18 +33,6 @@ bool valid_slug(const std::string &text, std::size_t limit)
     return true;
 }
 
-// A folder name under C:\Games: letters, digits, space, dot, dash, underscore.
-bool valid_folder(const std::string &text)
-{
-    if (text.empty() || text.size() > 64 || text.front() == ' ' || text.back() == ' ' || text.back() == '.' ||
-        text == "." || text == "..")
-        return false;
-    for (char c : text)
-        if (!(std::isalnum(static_cast<unsigned char>(c)) || c == '-' || c == '_' || c == '.' || c == ' '))
-            return false;
-    return true;
-}
-
 void strings(json::Value list, std::vector<std::string> &out, std::size_t max, std::size_t length)
 {
     list.each([&](json::Value item) {
