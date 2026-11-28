@@ -24,7 +24,7 @@ ALL_CXXFLAGS := -std=c++20 -fno-exceptions -fno-rtti $(WARN) $(INCLUDES) $(SDL_C
 ALL_CFLAGS := -std=c11 $(INCLUDES) -DMINIZ_NO_TIME -D_DEFAULT_SOURCE $(CFLAGS)
 
 CORE_SOURCES := $(wildcard src/core/*.cpp src/net/*.cpp src/stores/*.cpp src/install/*.cpp src/runtime/*.cpp) \
-	src/play/library.cpp src/play/arguments.cpp src/platform/host.cpp src/platform/host_http.cpp
+	src/play/library.cpp src/play/arguments.cpp src/play/components.cpp src/platform/host.cpp src/platform/host_http.cpp
 UI_SOURCES := $(wildcard src/ui/*.cpp) src/main.cpp src/play/play.cpp src/play/easyrpg_backend.cpp
 THIRD_PARTY := third_party/yyjson/yyjson.c third_party/monocypher/monocypher.c \
 	third_party/monocypher/monocypher-ed25519.c third_party/miniz/miniz.c third_party/miniz/miniz_tdef.c \

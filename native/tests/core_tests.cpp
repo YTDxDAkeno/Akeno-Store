@@ -9,6 +9,7 @@
 #include "install/installer.hpp"
 #include "install/library.hpp"
 #include "net/http.hpp"
+#include "play/components.hpp"
 #include "play/library.hpp"
 #include "play/play.hpp"
 #include "platform/platform.hpp"
@@ -725,6 +726,57 @@ static void test_library_install()
     fs::remove_tree(fs::parent(dir));
 }
 
+static void test_components()
+{
+    const std::string dir = temp_dir("components");
+    fs::make_dirs(dir);
+    ::setenv("AKENO_DATA_DIR", fs::join(dir, "data").c_str(), 1);
+    const char *param = R"({"titleId":"PPSA99995","contentVersion":"00.003.000","applicationCategoryType":0,
+      "localizedParameters":{"defaultLanguage":"en-US","en-US":{"titleName":"prospero-win"}}})";
+    const std::string zip_path = fs::join(dir, "pw.zip");
+    const std::string zip = make_zip(zip_path, {{"PPSA99995/eboot.bin", "SELF"},
+                                                {"PPSA99995/sce_sys/param.json", param},
+                                                {"PPSA99995/win/wine/lib/wine/x86_64-unix/ntdll.prx", "PRX"},
+                                                {"PPSA99995/win/wine/share/wine/wine.inf", "inf"},
+                                                {"PPSA99995/assets/launcher.png", "png"}});
+    auto transport = std::make_unique<FakeTransport>();
+    transport->bodies["https://files.example.com/pw.zip"] = zip;
+    net::Client client(std::move(transport));
+    Library library(fs::join(dir, "receipts"));
+    Installer installer(client, library, fs::join(dir, "receipts"), [](Game &, std::string &e) {
+        e = "no resolver in this test";
+        return false;
+    });
+    CHECK(required_components("windows") == std::vector<std::string>({"wine"}));
+    CHECK(missing_components("windows") == std::vector<std::string>({"wine"}) && missing_components("easyrpg").empty());
+    Game source;
+    source.id = "prosperostore:PPSA99995";
+    source.title_id = "PPSA99995";
+    source.access = Access::Install;
+    source.content_version = "00.003.000";
+    source.artifact_url = "https://files.example.com/pw.zip";
+    source.sha256 = sha256_hex(zip);
+    source.size = zip.size();
+    source.resolved = true;
+    JobState state{};
+    CHECK(wait_for(installer, installer.install_component("wine", source), state) && state == JobState::Done);
+    const auto wine = installed_component("wine");
+    CHECK(wine && wine->version == "00.003.000" && wine->source == source.id && wine->sha256 == source.sha256);
+    if (wine)
+    {
+        CHECK(fs::is_file(fs::join(wine->path, "wine/lib/wine/x86_64-unix/ntdll.prx")));
+        CHECK(!fs::exists(fs::join(wine->path, "eboot.bin")) && !fs::exists(fs::join(wine->path, "assets")));
+    }
+    CHECK(missing_components("windows").empty());
+    // A package without the expected runtime file is refused.
+    const std::string bad = make_zip(fs::join(dir, "bad.zip"), {{"PPSA99995/eboot.bin", "SELF"},
+                                                               {"PPSA99995/sce_sys/param.json", param}});
+    (void)bad;
+    CHECK(!component_spec("unknown") && component_spec("wine"));
+    ::unsetenv("AKENO_DATA_DIR");
+    fs::remove_tree(fs::parent(dir));
+}
+
 static void test_itch_api()
 {
     std::string id, error;
@@ -814,6 +866,7 @@ int main()
     test_akeno_catalog();
     test_library_install();
     test_itch_api();
+    test_components();
     test_compat_db();
     std::printf("%d checks, %d failures\n", checks, failures);
     return failures ? 1 : 0;

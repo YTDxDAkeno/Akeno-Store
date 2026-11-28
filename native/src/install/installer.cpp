@@ -14,6 +14,7 @@
 #include "core/json.hpp"
 #include "core/zip.hpp"
 #include "platform/platform.hpp"
+#include "play/components.hpp"
 #include "play/library.hpp"
 #include "runtime/runtimes.hpp"
 
@@ -109,6 +110,29 @@ int Installer::uninstall(const InstalledTitle &title)
     entry->job.title_id = title.title_id;
     entry->job.root = title.folder;
     entry->job.game_id = title.source_game_id;
+    entries_.push_back(entry);
+    wake_.notify_all();
+    return entry->job.id;
+}
+
+int Installer::install_component(const std::string &component, const Game &source)
+{
+    auto entry = std::make_shared<Entry>();
+    entry->game = source;
+    entry->cancel = std::make_shared<net::Cancel>();
+    std::lock_guard lock(mutex_);
+    for (const auto &existing : entries_)
+        if (!existing->job.finished() && existing->job.component == component)
+            return existing->job.id;
+    const ComponentSpec *spec = component_spec(component);
+    entry->job.id = next_id_++;
+    entry->job.kind = JobKind::Install;
+    entry->job.component = component;
+    entry->job.game_id = source.id;
+    entry->job.title = spec ? spec->name : component;
+    entry->job.title_id = source.title_id;
+    entry->job.root = components_root();
+    entry->job.total = source.size;
     entries_.push_back(entry);
     wake_.notify_all();
     return entry->job.id;
@@ -248,6 +272,11 @@ bool Installer::do_install(Entry &entry, std::string &error)
         return false;
     }
     const std::string root = entry.job.root;
+    if (!entry.job.component.empty() && (!component_spec(entry.job.component) || game.access != Access::Install))
+    {
+        error = "Unbekannte Runtime-Komponente";
+        return false;
+    }
     if (entry.job.library && !valid_library_id(game.profile))
     {
         error = "Der Katalogeintrag hat keine gültige Bibliotheks-ID";
@@ -396,6 +425,8 @@ bool Installer::do_install(Entry &entry, std::string &error)
         error = "SHA-256 stimmt nicht: Der Download entspricht nicht dem Katalog. Nichts wurde installiert.";
         return false;
     }
+    if (!entry.job.component.empty())
+        return finish_component(entry, archive, job_dir, digest, error);
     if (entry.job.library)
         return finish_library(entry, archive, job_dir, digest, error);
     std::string zip_error;
@@ -498,6 +529,78 @@ bool Installer::do_uninstall(Entry &entry, std::string &error)
     }
     fs::remove_tree(trash);
     library_.remove_receipt(entry.job.title_id);
+    return true;
+}
+
+// ---------------------------------------------------------------------------------------
+// Shared runtime components
+
+bool Installer::finish_component(Entry &entry, const std::string &archive, const std::string &job_dir,
+                                 const std::string &digest, std::string &error)
+{
+    const int id = entry.job.id;
+    const ComponentSpec *spec = component_spec(entry.job.component);
+    const Game &game = entry.game;
+    std::string zip_error;
+    // The source is a PS5 title ZIP; the runtime is a subtree of its title folder.
+    const auto folder = zip::find_title_folder(archive, zip_error);
+    if (!folder)
+    {
+        error = zip_error;
+        return false;
+    }
+    const std::string keep = spec->keep;
+    const std::string version = sanitize_text(game.content_version.empty() ? game.version : game.content_version, 60);
+    const std::string dir = fs::join(components_root(), spec->id);
+    const std::string staging = fs::join(job_dir, "component");
+    update(id, [&](Job &job) {
+        job.state = JobState::Unpacking;
+        job.done = 0;
+        job.total = folder->bytes;
+    });
+    if (!zip::extract(archive, folder->prefix + keep, staging,
+                      [&](std::uint64_t done, std::uint64_t total) {
+                          update(id, [&](Job &job) {
+                              job.done = done;
+                              job.total = total;
+                          });
+                          return !entry.cancel->requested.load();
+                      },
+                      error))
+        return false;
+    fs::remove_tree(archive);
+    const std::string marker = std::string(spec->marker).substr(keep.size());
+    if (!fs::is_file(fs::join(staging, marker)))
+    {
+        error = std::string("Das Paket enthält die erwartete Datei ") + spec->marker + " nicht. Nichts wurde installiert.";
+        return false;
+    }
+    update(id, [](Job &job) { job.state = JobState::Finishing; });
+    const std::string destination = fs::join(dir, version.empty() ? "current" : version);
+    fs::make_dirs(dir);
+    fs::remove_tree(destination);
+    if (!fs::rename(staging, destination))
+    {
+        error = "Die Runtime kann nicht nach " + dir + " verschoben werden";
+        return false;
+    }
+    InstalledComponent record;
+    record.id = spec->id;
+    record.version = version;
+    record.path = destination;
+    record.source = game.id;
+    record.sha256 = digest;
+    record.installed = platform::unix_time();
+    if (!write_component_record(record))
+    {
+        error = "Der Eintrag der Runtime kann nicht geschrieben werden";
+        return false;
+    }
+    // Older versions go once the new one is recorded.
+    for (const fs::Entry &old : fs::list(dir))
+        if (old.directory && fs::join(dir, old.name) != destination)
+            fs::remove_tree(fs::join(dir, old.name));
+    update(id, [&](Job &job) { job.note = std::string(spec->name) + " " + version + " · von allen Spielen geteilt"; });
     return true;
 }
 

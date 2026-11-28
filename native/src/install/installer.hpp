@@ -51,6 +51,7 @@ struct Job
     std::string root;     // install root (install) or the title folder (uninstall)
     bool library = false; // a game for Akeno's own library (played in Akeno's play mode)
     std::string profile;  // its library id
+    std::string component; // a shared runtime component (play/components.hpp) instead of a title
     std::uint64_t done = 0, total = 0;
     double bytes_per_second = 0;
     std::string error;
@@ -76,6 +77,9 @@ class Installer
     int uninstall(const InstalledTitle &title);
     // Removes a game from Akeno's library (downloaded files; saves are kept).
     int uninstall_library(const std::string &id, const std::string &title);
+    // Downloads a shared runtime component from the catalog entry that carries it (`source`,
+    // a verified PS5 title ZIP) and keeps only its runtime subtree. One job per component.
+    int install_component(const std::string &component, const Game &source);
     void cancel(int job);
     std::vector<Job> jobs() const;
     bool busy() const;
@@ -100,6 +104,8 @@ class Installer
     bool do_uninstall(Entry &entry, std::string &error);
     bool finish_library(Entry &entry, const std::string &archive, const std::string &job_dir, const std::string &digest,
                         std::string &error);
+    bool finish_component(Entry &entry, const std::string &archive, const std::string &job_dir,
+                          const std::string &digest, std::string &error);
     void update(int id, const std::function<void(Job &)> &change);
 
     net::Client &http_;

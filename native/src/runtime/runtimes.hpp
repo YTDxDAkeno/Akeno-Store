@@ -28,6 +28,7 @@ struct RuntimeInfo
     const char *basis;   // the project and licence it builds on
     const char *detail;  // current state in plain words
     RuntimeState state;
+    const char *components = nullptr; // shared runtime components it needs first ("wine"), comma separated
 };
 
 const std::vector<RuntimeInfo> &akeno_runtimes();

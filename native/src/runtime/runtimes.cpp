@@ -32,7 +32,8 @@ const std::vector<RuntimeInfo> &akeno_runtimes()
         {"windows", "Windows x86/x64", "Windows-Spiele (PE32/PE64), Unity-Mono/IL2CPP- und GameMaker-Windows-Builds",
          "Wine im eigenen Titel nach dem Aufbau von Prospero Win (LGPL-2.1): ntdll.prx, Wine-Treiber für VideoOut, "
          "Pad und Audio, i386-Übersetzer, DXVK/Zink",
-         "Geplant: braucht die Wine-PRX-Module (rund 170 MB) und ihre Erprobung auf der Konsole", RuntimeState::Planned},
+         "Geplant: braucht die Wine-PRX-Module (rund 170 MB) und ihre Erprobung auf der Konsole", RuntimeState::Planned,
+         "wine"},
         {"linux", "Linux x86-64 (ELF)", "Linux-Builds von Spielen, Godot- und Unity-Linux-Exporte",
          "ELF-Loader mit Linux-ABI nach PokeMMO Prospero (GPL-3.0) und PokeMMO-NX (MIT), OpenGL über ps5-opengl (Mesa)",
          "Geplant: der Loader deckt bisher die Bibliotheken eines einzelnen Spiels (PokeMMO) ab", RuntimeState::Planned},
