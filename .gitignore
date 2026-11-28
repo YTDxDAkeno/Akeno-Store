@@ -6,3 +6,4 @@ __pycache__/
 /ps5/.deps/
 /ps5/build/
 /ps5/dist/
+/.claude/worktrees/

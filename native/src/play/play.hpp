@@ -8,6 +8,7 @@
 // ("--return=<id>"), or goes back to the home screen when a home-screen tile started it.
 #pragma once
 
+#include <cstdint>
 #include <string>
 #include <vector>
 
@@ -24,6 +25,9 @@ struct Request
 // Reads --play=<id>, --play <id>, --from-hub and --return=<id> from the title's arguments.
 // The system passes an empty argv[0], so every argument is looked at.
 Request parse_arguments(int argc, char **argv);
+
+// The launch payload's hand-over file (<id>\n<unix time>\n): a game for at most a minute.
+Request parse_handover(const std::string &text, std::int64_t now);
 
 // The arguments the hub restarts with to play `id`.
 std::vector<std::string> play_arguments(const std::string &id, bool from_hub);

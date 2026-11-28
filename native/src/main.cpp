@@ -118,8 +118,17 @@ bool save_screenshot(SDL_Renderer *renderer, const std::string &path)
 int main(int argc, char **argv)
 {
     platform::init();
-    // Play mode: the hub restarted this title to run one game with an integrated runtime.
-    const play::Request request = play::parse_arguments(argc, argv);
+    // Play mode: the hub restarted this title to run one game with an integrated runtime,
+    // or a home-screen tile asked for a game (argument, or the payload's hand-over file).
+    play::Request request = play::parse_arguments(argc, argv);
+    const std::string handover = fs::join(platform::data_dir(), "launch/next.txt");
+    if (const auto text = fs::read_file(handover, 1024))
+    {
+        fs::remove_tree(handover);
+        const play::Request file = play::parse_handover(*text, platform::unix_time());
+        if (request.game.empty() && request.returned.empty())
+            request.game = file.game;
+    }
     if (!request.game.empty())
     {
         std::string error;

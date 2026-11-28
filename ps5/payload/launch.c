@@ -11,10 +11,18 @@
  *   /data/homebrew/<requester>/forward.txt   (shortcut tiles)
  *   /data/akeno/launch/<requester>.txt       (Akeno itself)
  * Each step is logged to /data/akeno/launch/last.log.
+ *
+ * Switching games: if the target title is already running (Akeno in the background while
+ * another tile is started), it is closed first the way the PS button's Close does it
+ * (sceSystemServiceKillApp, as Prospero Win ends its titles), so the new start really
+ * starts it with the new arguments instead of only bringing the old process to the front.
+ * For Akeno the game is also handed over in /data/akeno/launch/next.txt, which Akeno reads
+ * at startup when the system delivers no arguments.
  */
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
+#include <time.h>
 #include <unistd.h>
 
 #define SLOT_MARKER "AKENO-LAUNCH-REQUESTER-SLOT-0001"
@@ -34,6 +42,7 @@ int sceSystemServiceLaunchApp(const char *title_id, const char *argv[], lnc_app_
 int sceLncUtilLaunchApp(const char *title_id, const char *argv[], lnc_app_param_t *param);
 uint32_t sceLncUtilGetAppIdOfRunningBigApp(void);
 int sceLncUtilGetAppTitleId(uint32_t app_id, char *title_id);
+int sceSystemServiceKillApp(int app_id, int how, int reason, int core_dump);
 int sceUserServiceInitialize(void *param);
 int sceUserServiceGetForegroundUser(int *user_id);
 
@@ -115,6 +124,34 @@ int main(void)
     if (log)
         fprintf(log, "%s -> %s with %d argument(s); user %d (0x%08x); waited %d step(s), running '%s'\n", requester,
                 target, argc, user, (unsigned)foreground, waited, title);
+    // A controlled switch: close a running instance of the target so it starts afresh.
+    running_title(title);
+    if (strcmp(title, target) == 0)
+    {
+        const uint32_t app = sceLncUtilGetAppIdOfRunningBigApp();
+        const int killed = sceSystemServiceKillApp((int)app, -1, 0, 0);
+        int gone = 0;
+        for (; gone < 40; gone++)
+        {
+            usleep(250000);
+            running_title(title);
+            if (strcmp(title, target) != 0)
+                break;
+        }
+        if (log)
+            fprintf(log, "%s was running: close 0x%08x, gone after %d step(s)\n", target, (unsigned)killed, gone);
+        usleep(500000);
+    }
+    // Hand the game over to Akeno in a file as well (see the comment at the top).
+    if (strcmp(target, "PPSA90410") == 0 && argc > 0 && strncmp(arguments[0], "--play=", 7) == 0)
+    {
+        FILE *next = fopen("/data/akeno/launch/next.txt", "w");
+        if (next)
+        {
+            fprintf(next, "%s\n%lld\n", arguments[0] + 7, (long long)time(NULL));
+            fclose(next);
+        }
+    }
     lnc_app_param_t param = {sizeof(param), user, 0, 0, 0};
     int result = sceLncUtilLaunchApp(target, arguments, &param);
     if (log)

@@ -722,6 +722,9 @@ static void test_library_install()
     char *argv2[] = {arg0, bad1};
     CHECK(play::parse_arguments(2, argv2).game.empty());
     CHECK(play::play_arguments("x", true) == std::vector<std::string>({"--play=x", "--from-hub"}));
+    CHECK(play::parse_handover("my-game\n1000\n", 1030).game == "my-game");
+    CHECK(play::parse_handover("my-game\n1000\n", 1100).game.empty()); // older than a minute
+    CHECK(play::parse_handover("../x\n1000\n", 1000).game.empty() && play::parse_handover("junk", 5).game.empty());
     ::unsetenv("AKENO_DATA_DIR");
     fs::remove_tree(fs::parent(dir));
 }

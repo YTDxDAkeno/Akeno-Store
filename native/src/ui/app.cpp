@@ -6,6 +6,7 @@
 #include "core/json.hpp"
 #include "core/util.hpp"
 #include "platform/platform.hpp"
+#include "play/components.hpp"
 #include "play/play.hpp"
 #include "runtime/launch.hpp"
 
@@ -626,6 +627,26 @@ void App::launch(const std::string &title_id, const std::vector<std::string> &ar
     quit_ = true; // the payload starts the title once Akeno has closed
 }
 
+bool App::ensure_components(const std::string &runtime, bool quiet)
+{
+    const std::vector<std::string> missing = missing_components(runtime);
+    for (const std::string &id : missing)
+    {
+        const ComponentSpec *spec = component_spec(id);
+        const int index = spec ? game_index_by_id(spec->source) : -1;
+        if (index < 0)
+        {
+            toast("Runtime nicht verfügbar",
+                  std::string(spec ? spec->name : id.c_str()) + ": Quelle nicht im Katalog (Kataloge laden?)", true);
+            continue;
+        }
+        installer_->install_component(id, games_[static_cast<std::size_t>(index)]);
+        if (!quiet)
+            toast("Runtime wird einmalig installiert", std::string(spec->name) + " – danach für alle Spiele bereit");
+    }
+    return missing.empty();
+}
+
 void App::play(const GameProfile &profile)
 {
     if (!play::runtime_built(profile.runtime))
@@ -633,6 +654,8 @@ void App::play(const GameProfile &profile)
         toast("Nicht spielbar", "Die Akeno-Runtime " + runtime_name(profile.runtime) + " fehlt in diesem Build", true);
         return;
     }
+    if (!ensure_components(profile.runtime))
+        return; // the runtime's files are being installed; Play works once they are
     // Akeno restarts its own title in play mode; the game runs inside Akeno, full screen.
     compat_->set_pending({profile.source.empty() ? "library:" + profile.id : profile.source, profile.title,
                           runtime_name(profile.runtime), platform::unix_time()});
@@ -1683,6 +1706,9 @@ void App::update(float dt)
         if (job.finished() && announced[job.id] != job.state)
         {
             announced[job.id] = job.state;
+            if (job.state == JobState::Done && job.library && job.kind == JobKind::Install)
+                if (const auto profile = read_profile(job.profile))
+                    ensure_components(profile->runtime, true);
             if (job.state == JobState::Done)
                 toast(job.kind == JobKind::Install ? "Installiert" : "Entfernt",
                       job.title + (job.kind != JobKind::Install ? ""
@@ -2656,6 +2682,13 @@ std::vector<std::string> App::diagnose_lines() const
     for (const RuntimeInfo &info : akeno_runtimes())
         lines.push_back(std::string(info.state == RuntimeState::Integrated ? "Eingebaut: " : "Geplant: ") + info.name +
                         " – " + info.basis);
+    for (const ComponentSpec &spec : component_specs())
+    {
+        const auto installed = installed_component(spec.id);
+        lines.push_back(std::string("Komponente ") + spec.name + ": " +
+                        (installed ? "installiert, Version " + installed->version + " in " + installed->path
+                                   : std::string("nicht installiert (wird bei Bedarf automatisch geladen)")));
+    }
     lines.push_back("Bibliothek: " + std::to_string(profiles_.size()) + " Spiele in " + library_root());
     lines.push_back(std::string("itch.io-Konto: ") + (itch_key_.empty() ? "nicht verbunden" : "verbunden"));
     lines.push_back("# Letzter Start über den ELF-Loader");

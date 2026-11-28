@@ -130,6 +130,8 @@ class App
     void launch(const std::string &title_id, const std::vector<std::string> &arguments, const std::string &name,
                 const Game *game = nullptr, const std::string &runtime = {});
     void play(const GameProfile &profile);
+    // Queues the shared runtime components `runtime` still needs; true when all are installed.
+    bool ensure_components(const std::string &runtime, bool quiet = false);
     void profile_menu(const GameProfile &profile);
     void add_shortcut(const GameProfile &profile);
     void itch_menu();
