@@ -11,7 +11,8 @@ und dem älteren Python-Host-Hub als Entwicklungswerkzeug.
              ├──────────────────────────────────────────────────────────────┤
              │ stores/     Provider ─▶ Catalog (parallel, zusammengeführt)  │
              │ install/    Installer (Jobs) ─▶ Library (ShadowMountPlus)    │
-             │ runtime/    Erkennung ─▶ Runtime-Titel ─▶ Start/Verknüpfung   │
+             │ play/       Akeno-Bibliothek, Startprofile, Spielmodus      │
+             │ runtime/    Erkennung ─▶ eingebaute Runtime, Kacheln         │
              │ core/ net/  JSON, SHA-256/Ed25519, ZIP, Dateien, HTTP-Policy │
              ├──────────────────────────────────────────────────────────────┤
              │ platform/   host.cpp + libcurl   │  ps5.cpp + sceHttp         │
@@ -33,9 +34,14 @@ und dem älteren Python-Host-Hub als Entwicklungswerkzeug.
    Umbenennen in den ShadowMountPlus-Ordner (vorherige Version wird gesichert), Rechte `0777`, Beleg.
 4. **Library** liest `sce_sys/param.json` aller Titelordner und vergleicht `contentVersion` mit dem
    Katalog (`NN.NNN.NNN`) für Updates.
-5. **Runtimes** erkennen eigene Dateien anhand von Signaturen und routen zu PS5-Runtime-Titeln aus dem
-   Katalog. Starten und Hauptmenü-Kacheln laufen über eine Payload am ELF-Loader, weil ein Titel keinen
-   anderen Titel starten kann.
+5. **Runtimes** sind in Akeno eingebaut. Die Erkennung bestimmt Engine und zuständige Runtime;
+   Spiele für eine eingebaute Runtime landen in `/data/akeno/library/<id>` mit Startprofil.
+6. **Spielmodus:** „Spielen" startet Akenos eigenen Titel mit `--play=<id>` neu
+   (`sceSystemServiceLoadExec`, wie Prospero Win und MihawkOS); die Runtime (zurzeit EasyRPG Player
+   für RPG Maker 2000/2003) übernimmt Bild, DualSense und Ton und startet danach zurück in den Hub.
+   Hauptmenü-Kacheln starten `PPSA90410 --play=<id>` direkt. Native PS5-Titel aus den Stores startet
+   Akeno über eine Payload am ELF-Loader, weil ein Titel keinen anderen Titel starten kann.
+   Akeno öffnet für Spiele keine anderen Apps, Browser oder Launcher ([docs/RUNTIMES.md](docs/RUNTIMES.md)).
 
 ## Plattformschicht
 

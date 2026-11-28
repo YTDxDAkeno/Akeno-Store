@@ -18,6 +18,13 @@ Startcode), deshalb wird er als Ganzes unter der GPL-3.0 verbreitet.
 | [stb](https://github.com/nothings/stb) | `2c980bb` | Bilder, TrueType, PNG | MIT / Public Domain |
 | [QR Code generator](https://github.com/nayuki/QR-Code-generator) | v1.8.0 | QR-Codes | MIT |
 | [Inter](https://github.com/rsms/inter) | 4.x | Schrift | SIL OFL 1.1 (`native/assets/fonts/Inter-LICENSE.txt`) |
+| [EasyRPG Player](https://github.com/EasyRPG/Player) | 0.8.1.1 (`78328fa`) | Eingebaute RPG-Maker-2000/2003-Runtime | GPL-3.0-or-later |
+| [liblcf](https://github.com/EasyRPG/liblcf) | 0.8.1 (`92c4450`) | RPG-Maker-Datenformate | MIT |
+| [pixman](https://gitlab.freedesktop.org/pixman/pixman) | 0.42.2 (Ubuntu-Quellarchiv, SHA-256 `ea1480ef…`) | Pixel-Operationen der RPG-Maker-Runtime | MIT |
+| [libpng](https://github.com/pnggroup/libpng) | 1.6.48 (`ea12796`) | PNG-Grafiken der Spiele | libpng License v2 |
+| [zlib](https://zlib.net) | 1.3.2 | Kompression (libpng, Player) | zlib |
+| [{fmt}](https://github.com/fmtlib/fmt) | 10.2.1 | Textformatierung (nur Header) | MIT |
+| [inih](https://github.com/benhoyt/inih) | r58 | INI-Dateien der Spiele | BSD-3-Clause |
 
 Die Bibliotheksdateien sind mit den SHA-256-Werten aus ProsperoStores `third_party/STORE_SOURCES.json`
 geprüft übernommen. Designvorlagen ohne Codeübernahme: MihawkOS/PS5_RetroArch-Forwarder

@@ -4,6 +4,7 @@
 
 #include "core/fs.hpp"
 #include "core/util.hpp"
+#include "platform/platform.hpp"
 
 #include <algorithm>
 
@@ -40,6 +41,10 @@ const Texture *ImageCache::get(const std::string &source, int w, int h, int radi
     slot.used = frame_;
     if (slot.texture)
         return &slot.texture;
+    // A picture that failed (a network hiccup while the console starts, for example) is asked
+    // for again after 20 seconds, at most three times.
+    if (slot.failed && slot.attempts < 3 && platform::monotonic_ms() - slot.failed_at > 20000)
+        slot.failed = false;
     if (!slot.failed && !slot.queued)
     {
         slot.queued = true;
@@ -57,6 +62,29 @@ const Texture *ImageCache::get(const std::string &source, int w, int h, int radi
     return nullptr;
 }
 
+bool ImageCache::failed(const std::string &source) const
+{
+    const auto it = failed_sources_.find(source);
+    return it != failed_sources_.end() && it->second >= 3;
+}
+
+std::string ImageCache::cached_file(const std::string &source) const
+{
+    if (!source.empty() && source[0] == '/')
+        return fs::is_file(source) ? source : std::string();
+    const std::string path = fs::join(cache_dir_, hex64(fnv1a(source)));
+    return is_https_url(source) && fs::is_file(path) ? path : std::string();
+}
+
+ImageCache::Stats ImageCache::stats() const
+{
+    Stats stats;
+    stats.loaded = loaded_count_;
+    stats.failed = failed_count_;
+    stats.last_error = last_error_;
+    return stats;
+}
+
 std::size_t ImageCache::pending() const
 {
     std::lock_guard lock(mutex_);
@@ -66,7 +94,7 @@ std::size_t ImageCache::pending() const
 void ImageCache::pump(int budget)
 {
     std::deque<std::pair<std::string, Pixels>> ready;
-    std::vector<std::string> failed;
+    std::vector<std::pair<std::string, std::string>> failed;
     {
         std::lock_guard lock(mutex_);
         while (!ready_.empty() && budget-- > 0)
@@ -84,12 +112,20 @@ void ImageCache::pump(int budget)
         slot.texture.corner = static_cast<int>(std::stoi(key.substr(key.rfind('r') + 1)));
         slot.queued = false;
         slot.failed = !slot.texture;
+        if (slot.texture)
+            ++loaded_count_;
     }
-    for (const auto &key : failed)
+    for (const auto &[key, reason] : failed)
     {
         Slot &slot = slots_[key];
         slot.queued = false;
         slot.failed = true;
+        slot.failed_at = platform::monotonic_ms();
+        ++slot.attempts;
+        ++failed_count_;
+        const std::string source = key.substr(0, key.rfind('|'));
+        failed_sources_[source] = std::max(failed_sources_[source], slot.attempts);
+        last_error_ = host_of(source) + ": " + reason;
     }
     // Evict the longest-unused textures beyond the budget.
     std::size_t loaded = 0;
@@ -109,20 +145,26 @@ void ImageCache::pump(int budget)
     }
 }
 
-bool ImageCache::load(const Request &request, Pixels &out)
+bool ImageCache::load(const Request &request, Pixels &out, std::string &reason)
 {
     std::string encoded;
     if (!request.source.empty() && request.source[0] == '/')
     {
         auto data = fs::read_file(request.source, 16 * 1024 * 1024);
         if (!data)
+        {
+            reason = "Datei fehlt";
             return false;
+        }
         encoded = std::move(*data);
     }
     else
     {
         if (!is_https_url(request.source))
+        {
+            reason = "keine HTTPS-Adresse";
             return false;
+        }
         const std::string cached = fs::join(cache_dir_, hex64(fnv1a(request.source)));
         if (auto data = fs::read_file(cached, 16 * 1024 * 1024))
             encoded = std::move(*data);
@@ -131,14 +173,23 @@ bool ImageCache::load(const Request &request, Pixels &out)
             const net::Response response = http_.get(request.source, 16 * 1024 * 1024, nullptr,
                                                      {{"Accept", "image/png,image/jpeg,image/gif,*/*;q=0.5"}});
             if (!response.ok())
+            {
+                reason = response.error.empty() ? "HTTP " + std::to_string(response.status) : response.error;
                 return false;
+            }
             encoded = response.body;
             fs::write_atomic(cached, encoded);
         }
     }
     Pixels decoded;
     if (!decode_image(encoded, request.w * 2, request.h * 2, decoded))
+    {
+        // stb_image reads PNG, JPEG, GIF and BMP; WebP and AVIF are not decoded.
+        const bool webp = encoded.size() > 12 && encoded.compare(8, 4, "WEBP") == 0;
+        reason = webp ? "WebP-Bild (nicht unterstützt)" : "Bildformat nicht lesbar";
+        fs::remove_tree(fs::join(cache_dir_, hex64(fnv1a(request.source))));
         return false;
+    }
     static const std::uint32_t tile = 0xFF54241Eu; // theme panel_hi (30, 36, 84)
     out = cover_crop(decoded, request.w, request.h, request.radius, &tile);
     const auto blend = [](std::uint32_t &pixel, float r, float g, float b, float k) {
@@ -187,12 +238,13 @@ void ImageCache::worker()
             queue_.pop_front();
         }
         Pixels pixels;
-        const bool ok = load(request, pixels);
+        std::string reason;
+        const bool ok = load(request, pixels, reason);
         std::lock_guard lock(mutex_);
         if (ok)
             ready_.emplace_back(request.key, std::move(pixels));
         else
-            failed_.push_back(request.key);
+            failed_.emplace_back(request.key, reason);
     }
 }
 

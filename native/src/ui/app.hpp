@@ -6,6 +6,7 @@
 #include "install/installer.hpp"
 #include "install/library.hpp"
 #include "platform/platform.hpp"
+#include "play/library.hpp"
 #include "runtime/runtimes.hpp"
 #include "stores/catalog.hpp"
 #include "ui/gfx.hpp"
@@ -55,13 +56,16 @@ struct Settings
 class App
 {
   public:
-    App(Gfx &gfx, std::string asset_dir);
+    // `returned_from`: the library game whose play mode just ended (the hub was restarted).
+    App(Gfx &gfx, std::string asset_dir, std::string returned_from = {});
     ~App();
 
     void press(Button button);
     void update(float dt);
     void draw();
     bool quit_requested() const { return quit_; }
+    // The library game to play once the hub has closed (main restarts the title in play mode).
+    const std::string &play_request() const { return play_request_; }
     bool controller_connected = false;
 
     // Drives a scripted walk through every screen (host screenshots and smoke tests).
@@ -112,7 +116,10 @@ class App
     std::vector<int> filter_games(const std::string &key, const std::string &query) const;
     const InstalledTitle *installed_for(const Game &game) const;
     bool update_available(const Game &game, const InstalledTitle &title) const;
-    bool runtime_installed(const std::string &family, const RuntimeInfo **which) const;
+    const GameProfile *profile_for(const Game &game) const;
+    // What the entry's status really is: games Akeno cannot run yet show as not compatible.
+    Compat shown_compat(const Game &game, std::string *note) const;
+    std::string runtime_label(const Game &game) const;
     int game_index_by_title(const std::string &title_id) const;
     int game_index_by_id(const std::string &id) const;
     int game_index_for(const InstalledTitle &title) const;
@@ -122,8 +129,11 @@ class App
     void run_action(const Game &game, int kind);
     void launch(const std::string &title_id, const std::vector<std::string> &arguments, const std::string &name,
                 const Game *game = nullptr, const std::string &runtime = {});
-    void play_web(const Game &game);
-    void launch_windows(const InstalledTitle &title);
+    void play(const GameProfile &profile);
+    void profile_menu(const GameProfile &profile);
+    void add_shortcut(const GameProfile &profile);
+    void itch_menu();
+    bool set_itch_key(const std::string &key, std::string &error);
     void rate_menu(const std::string &game_id, int focus = 0);
     void ask_pending_report();
     std::string compat_line(const Game &game) const;
@@ -160,6 +170,7 @@ class App
     void draw_toasts();
     void draw_tile(const Game &game, float x, float y, float size, bool focused, float focus_amount);
     void draw_badge(const std::string &text, float x, float y, Color fill, Color ink);
+    void draw_missing_cover(const std::string &title, const Rect &r, float radius, bool loading = false);
     float draw_glyph(Button button, float x, float y, float size);
     void draw_button(const std::string &label, const Rect &rect, bool focused, bool primary);
     void draw_progress(const Rect &rect, float fraction, Color color);
@@ -180,6 +191,10 @@ class App
 
     std::vector<Game> games_;
     std::vector<InstalledTitle> installed_;
+    std::vector<GameProfile> profiles_; // Akeno's own library
+    std::string play_request_, returned_;
+    std::string itch_key_;
+    bool key_entry_ = false; // the on-screen keyboard types the itch.io key
     std::vector<LocalGame> local_;
     std::vector<ProviderStatus> providers_;
     std::uint64_t catalog_generation_ = ~0ull, library_generation_ = ~0ull;

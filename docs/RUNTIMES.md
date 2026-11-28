@@ -1,64 +1,68 @@
-# Universelle Runtimes
+# Akeno-Runtimes
 
-Akeno portiert keine Spiele einzeln. Jede „Runtime" ist ein vorhandener PS5-Titel aus dem signierten
-ProsperoStore-Katalog. Akeno erkennt das Format eigener Dateien, wählt die passenden Runtime-Titel,
-installiert sie wie jeden anderen Titel und startet sie.
+Spiele laufen **in Akeno selbst**. Akeno öffnet für ein Spiel keine andere App, keinen Browser und
+keinen fremden Launcher. Die Quellcode-Recherche, auf der das beruht, steht in
+[RUNTIME_RESEARCH.md](RUNTIME_RESEARCH.md).
+
+## Spielmodus (`native/src/play/`)
+
+1. „Spielen" in Akeno: Akeno legt eine offene Kompatibilitäts-Nachfrage an und startet seinen eigenen
+   Titel mit `--play=<id> --from-hub` neu (`sceSystemServiceLoadExec("/app0/eboot.bin", …)`, auf dem
+   Host `execv`).
+2. `main()` erkennt den Spielmodus, lädt `/data/akeno/library/<id>/profile.json` und übergibt an die
+   eingebaute Runtime. Diese öffnet ihr eigenes SDL-Fenster im Vollbild und übernimmt DualSense und Ton.
+3. Endet das Spiel, startet Akeno mit `--return=<id>` zurück in den Hub und fragt nach dem
+   Kompatibilitätsbericht. Kommt der Start von einer Hauptmenü-Kachel (`--play=<id>` ohne
+   `--from-hub`), geht es danach zurück zum PS5-Hauptmenü.
+
+Startprofil (`profile.json`): `id`, `title`, `engine`, `runtime`, `folder` (Spieldateien), `saves`,
+`source` (Katalog-ID oder `import`), `version`, `cover`, `sha256`, `owned_files`, `installed`,
+`last_played`.
+
+## Runtimes
+
+| Runtime | Stand | Grundlage |
+| --- | --- | --- |
+| Native PS5-Titel | eingebaut | signierter ProsperoStore, RecompStore |
+| RPG Maker 2000/2003 | **eingebaut** (Host getestet, PS5 offen) | EasyRPG Player 0.8.1.1, liblcf 0.8.1 |
+| Windows x86/x64 | geplant | Wine im Titel nach Prospero Win (LGPL-2.1) |
+| Linux x86-64 (ELF) | geplant | ELF-Loader + Linux-ABI nach PokeMMO Prospero (GPL-3.0) |
+| Java / JVM / LWJGL | geplant | OpenJDK-25-Port (ps5-java25-homebrew) |
+| HTML5 / JS / WASM | geplant | WebKit (WPE) ohne Browser-Oberfläche |
+| Godot | geplant | Godot-Engine mit OpenGL ES (ps5-opengl) |
+| Ren'Py / Python | geplant | CPython, pygame_sdl2, Ren'Py (OpenGL ES) |
+| .NET / Mono | geplant | Mono; Windows-.NET-Spiele über die Windows-Runtime |
+| ROMs / Disc-Images | geplant | libretro-Kerne im Spielmodus |
 
 ## Erkennung (`native/src/runtime/runtimes.cpp`)
 
-Gelesen werden nur Dateiköpfe, nie ausgeführt. Beispiele: iNES-Kopf, N64-Byte-Order, Game-Boy-Prüfsumme,
-GBA-Header, NDS-Logo-Prüfsumme, GameCube/Wii-Disc-Magic, XDVDFS (Xbox, Xbox 360 XGD2/3),
-ISO 9660 mit `PLAYSTATION`-System und `BOOT2` (PS2) bzw. ohne (PS1), PSP-Volume, XCI/NSP, SWF, J2ME-Manifest,
-PE (x86/x86-64), ELF, Godot-PCK, Ren'Py, RPG-Maker-Projekte, HTML5-Exporte (Godot, Unity WebGL, Ren'Py).
+Gelesen werden nur Dateiköpfe und Ordnerstrukturen, nichts wird ausgeführt: `RPG_RT.ldb` (auch bis zu
+drei Ebenen tief), RPG Maker MV/MZ (`js/rpg_core.js`, `js/rmmz_core.js`), Ren'Py (`game/*.rpa`),
+HTML5 (`index.html`, Godot/Unity/Ren'Py-Web erkannt), Godot (`GDPC`), PE (x86/x86-64, Unity an
+`<Name>_Data`, GameMaker an `data.win`), ELF, JAR/MIDlet, SWF, ROM- und Disc-Signaturen.
+Jede Erkennung nennt die Engine, die zuständige Akeno-Runtime und ob diese eingebaut ist.
 
-## Routing
+## Installation
 
-| Familie | Runtime-Titel (Reihenfolge) | Startargumente |
-| --- | --- | --- |
-| Web / HTML5, Unity WebGL, Godot Web, RPG Maker MV/MZ | Parallax Browser `PPSA99207`, ProsperoWeb `PRWB00001` | Parallax: Adresse als Startargument (`ps5browser.c`, `startURLFromLaunch`; über 200 Zeichen über `/data/ps5webkit/open-url.txt`). ProsperoWeb: keine Start-URL → Adresse und QR |
-| Windows (PE) | MihawkOS `PPSA99170`, PC5 `PPSA11018`, Prospero Win `PPSA99995`, TrinityXSX `PPSA83601` | MihawkOS: `profile=<id>` oder `path=<Windows-Pfad>` (`src/pw_wine_launch.h`) |
-| NES, SNES, GB/GBA, Mega Drive | RetroArch `PPSA99169`, Genesis Plus GX, Snes9x, fceuxs5 | keine (Runtime-eigene Bibliothek) |
-| N64 | Mupen64Plus `PPSA99064`, PSGopher, RetroArch | keine |
-| PS1 / PS2 / PSP | PSXS5, SwanStation / PS5SX2, Crux2 / PSP5 | keine |
-| GameCube/Wii, Dreamcast, Saturn | Porpoise, PSFlyCast, YmirPS5 | keine |
-| Xbox / Xbox 360 / Switch | XPSemu / PS5X360 / ProsperoEden | keine |
-| Flash, J2ME, PICO-8, C64 | Ruffle, Capy Mobile, PICO-8 for PS5, PS64 | keine |
+Für Spiele, die eine eingebaute Runtime spielt, lädt Akeno die **originalen Spieldateien** (z. B. über
+die itch.io-API), entpackt sie in `/data/akeno/library/<id>/game` und erkennt die Engine an den Dateien.
+Danach legt Akeno das Startprofil an. Passt die Engine zu keiner eingebauten Runtime, installiert Akeno
+nichts und nennt den Grund. Programme aus dem Download werden nie ausgeführt; die RPG-Maker-Runtime
+liest nur die Spieldaten.
 
-Ohne PS5-Runtime im Katalog (Stand heute): allgemeine Java-Desktop-JARs (ProsperoCraft bringt Java 25
-nur für Minecraft mit), Linux-ELF, native Ren'Py/Godot/Unity-Builds, RPG Maker 2000/2003, .NET, Python,
-Lua/LÖVE. Akeno nennt dann die Alternative (Web-Export → ProsperoWeb, Windows-Build → MihawkOS).
+Eigene Spiele: Ordner nach `/data/akeno/games` (oder `/mnt/usbN/akeno/games`) kopieren. Die Bibliothek
+erkennt sie, „In Akeno spielen" legt ein Profil an, ohne die Dateien zu verschieben.
 
-## Starten und Verknüpfungen
+RPG-Maker-Spiele, die das RTP brauchen: das RTP als eigene Kopie nach `/data/akeno/rtp/2000` bzw.
+`/2003` legen.
 
-Ein Titel darf keinen anderen starten. Akeno schreibt deshalb `/data/akeno/launch/PPSA90410.txt`
-(`AKENO-LAUNCH 1`, Ziel-Title-ID, Argumente) und sendet `assets/payload/akeno-launch.elf` an den
-ELF-Loader auf Port 9021; die Payload wartet, bis Akeno geschlossen ist, und ruft
-`sceLncUtilLaunchApp` (Fallback `sceSystemServiceLaunchApp`) auf. Hauptmenü-Verknüpfungen sind kleine
-Titelordner `PPSA90500`–`PPSA90599` mit eigener Kachel, `forward.txt` und derselben Payload. Das Design
-stammt von den Forwarder-Kacheln von PS5_RetroArch und MihawkOS (GPL-3.0-or-later). Konsolentest offen.
+## Hauptmenü-Kacheln
 
-## Windows-Spiele in MihawkOS
+Jedes Spiel in Akenos Bibliothek kann eine eigene Kachel bekommen (`PPSA90500`–`PPSA90599`, Bild aus
+dem Store-Cover). Die Kachel startet über die Akeno-Payload am ELF-Loader direkt
+`PPSA90410 --play=<id>`, ohne Umweg durch den Hub.
 
-Für Windows-Builds aus dem Akeno-Katalog nutzt Akeno MihawkOS' eigenes Bibliotheksformat
-(MihawkOS `docs/SELF_INSTALL.md`, `ps5/src/proton_launch.cpp` `read_game`):
+## Native PS5-Titel
 
-- Spielordner: `C:\Games\<Name>` = `/data/ps5proton/prefixes/mihawk/drive_c/Games/<Name>`
-  (gemeinsames Präfix `mihawk`; C: legt MihawkOS beim ersten Start an).
-- Bibliothekseintrag: `/data/ps5proton/games/akeno-<id>/game.json` mit `name`, `detail`,
-  `executable` (Windows-Pfad des Programms), `directory` und einem Block `akeno` (Katalog-ID, Version,
-  SHA-256, Ordner). MihawkOS liest nur seine eigenen Felder.
-- Start: MihawkOS `PPSA99170` mit `profile=akeno-<id>`.
-- Das Programm wählt Akeno nach dem Entpacken: zuerst die im Katalog genannten Namen, sonst das einzige
-  x86-/x86-64-Programm; Deinstallationsprogramme, Crash-Handler und Setup-Programme zählen nicht.
-- Ersetzt oder entfernt wird nur, was Akeno selbst angelegt hat. Spielstände unter `C:\users` bleiben.
-
-## Eigene ROMs und ISOs
-
-Eigene, rechtmäßig erstellte Dumps gehören nach `/data/akeno/games` (oder `/mnt/usbN/akeno/games`).
-Recomps aus RecompStore nennen das benötigte Original (z. B. „US-Disc SLUS-21590"); die Einrichtung
-übernimmt das jeweilige Spiel. Akeno liefert keine geschützten Spieldaten.
-
-## Python-Host-Runner
-
-`runtimes/managed.py` (Java 17/21/25, Linux-ELF auf dem Entwicklungsrechner) bleibt als Testwerkzeug
-erhalten; es hat keine Funktion auf der PS5.
+Ports aus dem ProsperoStore und RecompStore sind selbst die Spiele. Akeno installiert, aktualisiert und
+startet sie über die Payload am ELF-Loader, weil ein Titel keinen anderen Titel direkt starten kann.

@@ -1,9 +1,13 @@
 # Entwicklungsstand
 
-Stand 27. November 2026, Version `01.003.000` (Title-ID `PPSA90410`). Die Abdeckung des
+Stand 28. November 2026, Version `01.004.000` (Title-ID `PPSA90410`). Die Abdeckung des
 Master-Prompts Punkt für Punkt: [docs/MASTER_PROMPT_COVERAGE.md](docs/MASTER_PROMPT_COVERAGE.md).
 
 Legende: ✅ erreicht · ⬜ offen · — nicht zutreffend
+
+**Architektur seit `01.004.000`:** Spiele laufen in Akeno selbst. Akeno startet seinen eigenen Titel
+im Spielmodus neu, eine eingebaute Runtime spielt das Spiel. Weiterleitungen an andere Apps
+(Browser, MihawkOS, Emulator-Apps) gibt es nicht mehr ([docs/RUNTIMES.md](docs/RUNTIMES.md)).
 
 **Konsolentests (Nutzer, 27. November 2026):**
 
@@ -12,10 +16,8 @@ Legende: ✅ erreicht · ⬜ offen · — nicht zutreffend
    `ps5/tools/check-module.py` weist solche Module beim Build ab.
 2. Der korrigierte Build **startete auf der PS5**: Oberfläche, Kataloge und Download-Warteschlange
    erschienen (Foto des Nutzers). **Jede Installation scheiterte** mit `sceHttp 0x80431073` (Antwort-Header
-   zu groß – GitHub-Weiterleitungen tragen lange Header). Behoben: größere Header-Grenze,
-   Wiederaufnahme abgebrochener Downloads. Erneuter Test mit `01.003.000` offen.
-
-## Native PS5-App (`native/`, `ps5/`)
+   zu groß – GitHub-Weiterleitungen tragen lange Header). Behoben in `01.003.000`, auf der Konsole noch
+   nicht bestätigt.
 
 ## Native PS5-App (`native/`, `ps5/`)
 
@@ -33,27 +35,23 @@ Legende: ✅ erreicht · ⬜ offen · — nicht zutreffend
 | Deinstallation, Lauf-Schutz (`/mnt/sandbox`) | ✅ | ✅ | ✅ | ✅ | ⬜ | Host-Tests ✅ | — |
 | Titel starten (Payload über ELF-Loader 9021) | ✅ | ✅ | ✅ | ✅ | ⬜ | ⬜ | — |
 | Hauptmenü-Verknüpfungen (Kachel-Titel `PPSA905xx`) | ✅ | ✅ | ✅ | ✅ | ⬜ | Host-Test (Ordner, `param.json`, Icon, `forward.txt`, Payload-Slot) ✅ / PS5 ⬜ | — |
-| Engine-/Formaterkennung und Runtime-Routing | ✅ | ✅ | ✅ | ✅ | ⬜ | Host-Tests ✅ | — |
+| Engine-Erkennung (Engine, Runtime, spielbar ja/nein) | ✅ | ✅ | ✅ | ✅ | ⬜ | Host-Tests ✅ | — |
+| **Spielmodus** (Neustart mit `--play=<id>`, Rückkehr mit `--return=<id>`) | ✅ | ✅ | ✅ | ✅ | ⬜ | Host ✅ (`execv`) / PS5 ⬜ (`sceSystemServiceLoadExec`, wie Prospero Win) | — |
+| **Eingebaute RPG-Maker-2000/2003-Runtime** (EasyRPG Player 0.8.1.1 im `eboot.bin`) | ✅ | ✅ | ✅ | ✅ | ⬜ | Host: EasyRPG-TestGame läuft im Spielmodus ✅ / PS5 ⬜ | — |
+| Akeno-Bibliothek: Download, Engine-Erkennung, Startprofil, Deinstallation | ✅ | ✅ | ✅ | ✅ | ⬜ | Host-Tests (Fake-Download) ✅ | — |
+| itch.io-Downloads über die offizielle API mit eigenem Schlüssel | ✅ | ✅ | ✅ | ✅ | ⬜ | Parser-Tests ✅ / mit echtem Schlüssel ⬜ | — |
+| Hauptmenü-Kachel pro Spiel (startet `PPSA90410 --play=<id>`) | ✅ | ✅ | ✅ | ✅ | ⬜ | ⬜ | — |
 | Akeno-Katalog (38 kuratierte Spiele, mitgeliefert + neuere Revision aus dem Repository) | ✅ | ✅ | ✅ | ✅ | ⬜ | Host live ✅ | — |
-| Browserspiele direkt in Parallax Browser (Startadresse als Argument) | ✅ | ✅ | ✅ | ✅ | ⬜ | ⬜ | — |
-| Windows-Spiele in MihawkOS installieren (`C:\Games`, `games/<id>/game.json`) und mit `profile=` starten | ✅ | ✅ | ✅ | ✅ | ⬜ | Host-Test (Fake-Download, Layout, Deinstallation) ✅ / PS5 ⬜ | — |
 | Kompatibilitätsdatenbank (eigene Testberichte, Nachfrage nach dem Spielen, Export/Import) | ✅ | ✅ | ✅ | ✅ | ⬜ | Host-Tests ✅ | — |
 | Diagnose-Tab (System, Speicher, Runtimes, letzter Start, Stores, Netzwerktest, Protokoll, Bericht) | ✅ | ✅ | ✅ | ✅ | ⬜ | Host ✅ | — |
 
-## Spiele und Runtimes über Akeno
+## Spiele und Runtimes
 
-Akeno installiert Titel aus den Katalogen. Ob ein Spiel startet oder online spielbar ist, belegen die
-jeweiligen Upstream-Projekte für ihre Firmware; **Akeno selbst hat kein Spiel auf einer PS5 gestartet.**
-
-| Beispiel | Über Akeno installierbar | Von Akeno auf PS5 gestartet | Upstream-Angabe |
-| --- | --- | --- | --- |
-| ProsperoCraft `PPSA99874` | ✅ (Host-Probe: Download-Daten aufgelöst) | ⬜ | Minecraft Java 26.x auf PS5, Microsoft-Konto oder Offline-Profil |
-| PokeMMO Prospero `PPSA98001` | ✅ (im signierten Katalog) | ⬜ | FW 12.40, Online-Login und Kämpfe laut README |
-| OpenRCT2 `PPSA99728` | ✅ (Host-Probe aufgelöst) | ⬜ | FW 13.00, 56–58 fps, eigene RCT2-Daten nötig |
-| MihawkOS, PC5, Prospero Win, TrinityXSX (Windows) | ✅ | ⬜ | Alpha, spielabhängig |
-| Parallax Browser (WebGL, WebGPU, Gamepad-API) | ✅ | ⬜ | Startadresse als Argument laut Quellcode und README des Projekts auf der Konsole geprüft |
-| ProsperoWeb (HTML5/WebGL) | ✅ | ⬜ | FW 13.42 laut README |
-| RetroArch und Einzel-Emulatoren | ✅ | ⬜ | je Projekt |
+| Was | In Akeno spielbar | Auf der PS5 belegt |
+| --- | --- | --- |
+| Native PS5-Titel aus ProsperoStore/RecompStore (z. B. PokeMMO Prospero, ProsperoCraft, SuperTuxKart) | ✅ (installieren, starten) | Upstream-Projekte belegen ihre Titel; Start aus Akeno ⬜ |
+| RPG Maker 2000/2003 (itch.io, eigene Ordner) | ✅ eingebaute Runtime | ⬜ |
+| Windows, Linux, Java, HTML5, Godot, Unity, Ren'Py, .NET, ROMs | ⬜ geplant, als „Nicht kompatibel" markiert | — |
 
 ## Host-Entwicklungs-Hub (Python, `core/`, `stores/`, `apps/ps5-hub/web`)
 
@@ -72,12 +70,13 @@ pixelgenaue Ecken) 16 ms pro Frame in allen Tabs, 20–23 ms auf textlastigen De
 
 | Suite | Ergebnis |
 | --- | --- |
-| `make -C native test` (C++-Kern, inkl. RFC-8032-Vektoren, echtem signiertem Katalog, Installer-Ende-zu-Ende mit Fake-Transport, Wiederaufnahme, Akeno-Katalog, MihawkOS-Installation, Kompatibilitätsberichte) | 490 Prüfungen, 0 Fehler |
-| `make -C native probe` (live, alle Stores) | 7/7 Kataloge, 442 Einträge nach dem Zusammenführen, 259 installierbar, 45 in einer Runtime startbar |
+| `make -C native test` (C++-Kern, inkl. RFC-8032-Vektoren, echtem signiertem Katalog, Installer-Ende-zu-Ende mit Fake-Transport, Wiederaufnahme, Bibliotheks-Installation, Erkennung, itch.io-API, Spielmodus-Argumente, Kompatibilitätsberichte) | 513 Prüfungen, 0 Fehler |
+| Spielmodus auf dem Host (`akeno --play=testgame-2000`, EasyRPG-TestGame 2000, Xvfb) | Titel- und Sprachwahl-Bildschirm gerendert, Ende mit Code 0 |
+| `make -C native probe` (live, alle Stores) | 7/7 Kataloge, 517 Einträge nach dem Zusammenführen |
 | Live-Installation auf dem Host (`akeno-probe install:PPSA98766 install:PPSA99510`) | beide installiert, Bibliothek erkennt sie |
 | `python3 -m unittest discover -s tests` | 52 Tests, 3 Live-Tests übersprungen |
 | Live: `AKENO_LIVE_STORES=prosperostore,itch` | grün |
-| `bash ps5/build.sh` | `eboot.bin` und `libc.prx` „integrity: valid", Payload besteht ProsperoStores Loader-ELF-Prüfung |
+| `bash ps5/build.sh` | `eboot.bin` (mit EasyRPG, 8,9 MB) und `libc.prx` „integrity: valid", Modulprüfung bestanden |
 
-Nächster Schritt ist der Konsolentest von `01.003.000` nach [INSTALLATION.md](INSTALLATION.md#erster-test-auf-der-ps5).
+Nächster Schritt ist der Konsolentest von `01.004.000` nach [INSTALLATION.md](INSTALLATION.md#erster-test-auf-der-ps5).
 Bei Problemen hilft der Diagnosebericht (Tab „Diagnose" → „Bericht speichern" → `/data/akeno/diagnose.txt`).

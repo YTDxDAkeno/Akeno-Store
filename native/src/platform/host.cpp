@@ -13,6 +13,7 @@
 #include <ctime>
 #include <deque>
 #include <mutex>
+#include <unistd.h>
 
 namespace akeno::platform
 {
@@ -50,12 +51,6 @@ std::vector<std::string> import_dirs()
     const std::string dir = fs::join(data_root(), "simulated-ps5/data/akeno/games");
     fs::make_dirs(dir);
     return {dir};
-}
-
-std::string mihawk_root()
-{
-    const std::string root = fs::join(data_root(), "simulated-ps5/data/ps5proton");
-    return root;
 }
 
 std::string firmware_version() { return "Linux-Host"; }
@@ -101,6 +96,19 @@ bool prefers_german()
 void first_frame_shown() {}
 
 [[noreturn]] void quit() { std::exit(0); }
+
+void restart(const std::vector<std::string> &arguments)
+{
+    std::vector<char *> argv;
+    static char self[] = "akeno";
+    argv.push_back(self);
+    for (const std::string &argument : arguments)
+        argv.push_back(const_cast<char *>(argument.c_str()));
+    argv.push_back(nullptr);
+    std::fflush(stderr);
+    ::execv("/proc/self/exe", argv.data());
+    log("[akeno] restart failed");
+}
 
 bool send_to_loader(const std::string &elf_path, std::string &error)
 {

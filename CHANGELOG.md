@@ -1,5 +1,31 @@
 # Änderungen
 
+## 01.004.000 – Architekturkorrektur: Spiele laufen in Akeno selbst
+
+- **Keine Weiterleitungen mehr:** Spielen über Parallax Browser, ProsperoWeb, MihawkOS, RetroArch oder
+  andere Launcher ist entfernt, ebenso die Installation in MihawkOS. Spiele ohne eingebaute
+  Akeno-Runtime sind als „Nicht kompatibel" gekennzeichnet und nennen die fehlende Runtime.
+- **Spielmodus:** Akeno startet seinen eigenen Titel mit `--play=<id>` neu
+  (`sceSystemServiceLoadExec`); die Runtime spielt im Vollbild und Akeno kehrt danach in den Hub zurück.
+- **Erste eingebaute Runtime:** EasyRPG Player 0.8.1.1 für RPG Maker 2000/2003, aus gepinnten Quellen
+  gebaut und in Akenos `eboot.bin` gelinkt (dazu liblcf, pixman, libpng, zlib, fmt, inih). Fehlende
+  C-Locale-Funktionen für libc++ ergänzt `ps5/runtime/libc.c`.
+- **Akeno-Bibliothek:** Download der originalen Spieldateien, Erkennung von Engine und Runtime anhand
+  der Dateien, Startprofil in `/data/akeno/library/<id>`. Unpassende Downloads werden nicht installiert.
+  Eigene Spiele aus `/data/akeno/games` lassen sich ohne Kopie spielen.
+- **itch.io:** RPG-Maker-2000/2003-Spiele aus den itch.io-Feeds lassen sich über die offizielle
+  itch.io-API mit dem eigenen API-Schlüssel installieren (`data.json` → Uploads → signierte
+  Download-Adresse; der Schlüssel geht nur an `api.itch.io`). Schlüssel über Datei oder
+  Bildschirmtastatur.
+- **Hauptmenü-Kacheln pro Spiel**, die Akeno direkt im Spielmodus starten.
+- **Cover:** keine Buchstaben-Platzhalter mehr; fehlt ein Bild, steht „Kein Cover vom Anbieter"
+  daneben. Fehlgeschlagene Bilder werden bis zu dreimal neu geladen; die Diagnose zeigt den letzten
+  Bildfehler. Offizielle Logos aus den Projekt-Repositories für kuratierte Einträge.
+- **Runtime-Manager** zeigt die Akeno-Runtimes mit Stand und Grundlage; Recherche dazu in
+  `docs/RUNTIME_RESEARCH.md`.
+- Installer: Ein abgeschlossener Download mit falscher Größe wird nicht mehr dreimal wiederholt;
+  Zugangsdaten werden bei Weiterleitungen auf andere Hosts entfernt.
+
 ## 01.003.000 – Spiele aus dem Master-Prompt, MihawkOS-Installationen, Kompatibilität, Diagnose
 
 - **Downloads auf der Konsole repariert:** `sceHttp 0x80431073` (Antwort-Header zu groß bei

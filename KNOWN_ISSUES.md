@@ -1,28 +1,29 @@
 # Bekannte Einschränkungen
 
-- **Konsolentest von `01.003.000` offen.** Akeno startet auf der PS5 und lädt die Kataloge; in
-  `01.002.000` scheiterte jede Installation mit `sceHttp 0x80431073` (behoben, ungetestet).
-  Installation, Starts, Verknüpfungen, Parallax-Startadresse und MihawkOS-Installationen sind auf der
-  Konsole unbestätigt ([Testplan](INSTALLATION.md#erster-test-auf-der-ps5)).
+- **Konsolentest von `01.004.000` offen.** Akeno startet auf der PS5 und lädt die Kataloge. Downloads,
+  der Spielmodus (Neustart mit `--play`), die eingebaute RPG-Maker-Runtime und die Kacheln pro Spiel
+  sind auf der Konsole unbestätigt ([Testplan](INSTALLATION.md#erster-test-auf-der-ps5)).
+- **Nur eine eingebaute Runtime.** Gespielt werden können native PS5-Titel und RPG-Maker-2000/2003-Spiele.
+  Windows, Linux, Java, HTML5, Godot, Unity, Ren'Py, .NET und ROMs sind geplant
+  ([docs/RUNTIME_RESEARCH.md](docs/RUNTIME_RESEARCH.md)) und werden bis dahin als „Nicht kompatibel"
+  angezeigt.
+- **RPG-Maker-Runtime:** Musik in MP3 und OGG wird noch nicht abgespielt (WAV und MIDI schon); Texte
+  werden nur als Windows-1252 gelesen (japanische Originale zeigen falsche Zeichen); RTP-abhängige Spiele
+  brauchen eine eigene RTP-Kopie in `/data/akeno/rtp`. Der Software-Renderer skaliert das
+  320×240-Bild hoch.
+- **itch.io:** Downloads brauchen den eigenen API-Schlüssel; mit einem echten Schlüssel ist der Ablauf
+  noch nicht getestet. itch.io veröffentlicht keine SHA-256-Werte; geprüft wird die von itch.io genannte
+  Größe.
 - **Große Installationen sind langsam.** Die Konsole drosselt Schreibzugriffe eines Titels nach einigen
   hundert MB auf rund 2 MB/s. ProsperoStore lagert das Entpacken in einen Loader-Worker aus; Akeno
   entpackt noch im eigenen Prozess.
 - **Deinstallation entfernt die Hauptmenü-Kachel nicht sofort.** ProsperoStore ruft dafür
   `sceAppInstUtilAppUnInstall` aus einem Loader-Worker auf; Akeno entfernt nur den Ordner. Die Kachel
   verschwindet, wenn ShadowMountPlus neu scannt.
-- **Browserspiele:** Direktstart nur mit Parallax Browser; ProsperoWeb nimmt keine Start-URL an
-  (Akeno zeigt dann Adresse und QR-Code). Ob ein Browserspiel im PS5-Browser flüssig läuft, ist je
-  Spiel ungeprüft.
-- **Windows-Spiele über MihawkOS** setzen voraus, dass MihawkOS einmal gestartet wurde (es legt dabei
-  sein Laufwerk C: an). Installierbar sind nur Releases, für die GitHub einen SHA-256 veröffentlicht;
-  ältere Release-Assets haben oft keinen. Ob ein Spiel unter MihawkOS läuft, ist ungetestet.
-- **Akeno-Katalog:** Die Release-Dateinamen der Windows-Builds (Luanti, OpenRA, SRB2) stammen aus
-  den Projekten bekannten Namensmustern; geprüft werden sie erst, wenn die Konsole das Release
-  abfragt. Passt kein Asset, sagt Akeno das und installiert nichts.
-- **Runtime-Argumente.** MihawkOS (`profile=`, `path=`) und Parallax Browser (Adresse) nehmen
-  Startargumente; andere Runtimes werden ohne Datei geöffnet und zeigen ihre eigene Bibliothek.
-- **GOG, Epic, itch.io-PC-Downloads** sind ohne Konto-Anbindung nur Entdecken-Einträge (GOG-Spiele
-  lassen sich mit TrinityXSX auf der Konsole installieren).
+
+- **Start aus einer Kachel, während Akeno läuft:** Das System holt dann vermutlich nur Akeno in den
+  Vordergrund, statt das Spiel zu starten (nicht geprüft).
+- **GOG, Epic** sind Entdecken-Einträge: ihre Spiele brauchen Akenos Windows-Runtime und ein Konto.
 - **Downloads** laufen nacheinander; Pausieren gibt es nicht (Abbrechen und erneut starten setzt nicht
   fort, nur ein unterbrochener Versuch innerhalb desselben Auftrags).
 - **GitHub-API-Limit.** RecompStore- und GitHub-Installationen lösen Assets über die öffentliche

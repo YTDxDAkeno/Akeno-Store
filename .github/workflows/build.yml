@@ -17,9 +17,11 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y clang-18 lld-18 llvm-18 libclang-rt-18-dev cmake ninja-build \
-            python3-pil libsdl2-dev libcurl4-openssl-dev
+            python3-pil libsdl2-dev libcurl4-openssl-dev libpixman-1-dev libpng-dev zlib1g-dev
       - name: Native core tests (host)
         run: make -C native test
+      - name: Host app with the integrated RPG Maker runtime
+        run: make -C native app
       - name: Host hub tests
         run: python3 -m unittest discover -s tests
       - name: PS5 title (eboot.bin, libc.prx, PPSA90410.zip)

@@ -48,9 +48,9 @@ struct Job
     std::string game_id;
     std::string title;
     std::string title_id;
-    std::string root;   // install root (install) or the title folder (uninstall); MihawkOS's root for Windows games
-    bool windows = false; // a Windows game in MihawkOS's library
-    std::string profile;  // its MihawkOS catalog ID
+    std::string root;     // install root (install) or the title folder (uninstall)
+    bool library = false; // a game for Akeno's own library (played in Akeno's play mode)
+    std::string profile;  // its library id
     std::uint64_t done = 0, total = 0;
     double bytes_per_second = 0;
     std::string error;
@@ -74,6 +74,8 @@ class Installer
 
     int install(const Game &game, const std::string &root);
     int uninstall(const InstalledTitle &title);
+    // Removes a game from Akeno's library (downloaded files; saves are kept).
+    int uninstall_library(const std::string &id, const std::string &title);
     void cancel(int job);
     std::vector<Job> jobs() const;
     bool busy() const;
@@ -83,14 +85,6 @@ class Installer
 
     // Work area on the same volume as `root` (renames stay atomic): <parent>/akeno-work.
     static std::string work_dir_for(const std::string &root);
-
-    // The program a Windows game starts: the first of `preferred` found (shallowest first),
-    // else the only x86/x86-64 program in the tree. `relative` uses '/'.
-    static bool find_windows_program(const std::string &folder, const std::vector<std::string> &preferred,
-                                     std::string &relative, std::string &error);
-    // MihawkOS catalog entry (game.json) for a game in C:\Games\<folder>.
-    static std::string mihawk_game_json(const Game &game, const std::string &relative_program,
-                                        const std::string &sha256);
 
   private:
     struct Entry
@@ -104,9 +98,8 @@ class Installer
     void process(Entry &entry);
     bool do_install(Entry &entry, std::string &error);
     bool do_uninstall(Entry &entry, std::string &error);
-    bool finish_windows(Entry &entry, const std::string &archive, const std::string &job_dir, const std::string &digest,
+    bool finish_library(Entry &entry, const std::string &archive, const std::string &job_dir, const std::string &digest,
                         std::string &error);
-    bool uninstall_windows(Entry &entry, std::string &error);
     void update(int id, const std::function<void(Job &)> &change);
 
     net::Client &http_;

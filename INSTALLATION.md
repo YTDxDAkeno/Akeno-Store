@@ -42,17 +42,18 @@ was passiert, und bei Problemen `/data/akeno/akeno.log` (und `akeno.prev.log`) p
 | 8 | Bibliothek → DriftCheck → Deinstallieren | Ordner und Kachel verschwinden (die Kachel kann bis zum Neustart von ShadowMountPlus bleiben) | Deinstallation |
 | 9 | Eigene Datei (z. B. ein selbst gedumptes NES-ROM) nach `/data/akeno/games` kopieren | Bibliothek → „Eigene Spieldateien" erkennt das Format und bietet RetroArch an | Formaterkennung auf der Konsole |
 | 10 | Diagnose → „Netzwerk testen", danach „Bericht speichern" | Jeder Store zeigt OK oder einen Fehlertext; `/data/akeno/diagnose.txt` entsteht | Netzwerk und Diagnose auf der Konsole |
-| 11 | Store → „Im Browser spielbar" → Pokémon Showdown → „Parallax Browser installieren", danach „In Parallax Browser spielen" | Akeno schließt sich, Parallax öffnet play.pokemonshowdown.com | Browserspiel per Startadresse |
-| 12 | Nach Schritt 11 Akeno wieder öffnen | Frage „Wie lief Pokémon Showdown?" → Bewertung speichern; die Detailseite zeigt „Dein Test" | Kompatibilitätsbericht |
-| 13 | Nur wenn MihawkOS eingerichtet ist (einmal gestartet): Store → „Windows (MihawkOS)" → Luanti → „In MihawkOS installieren" | Download mit SHA-256-Prüfung, Ordner `C:\Games\Luanti`, Eintrag „Luanti" in MihawkOS; oder eine klare Meldung, dass das Release keinen SHA-256 hat | Windows-Installation |
-| 14 | Luanti → „In MihawkOS starten" | MihawkOS startet direkt Luanti | Start mit `profile=` |
+| 11 | Eigenes RPG-Maker-2000/2003-Spiel als Ordner nach `/data/akeno/games` kopieren (z. B. das freie [EasyRPG TestGame](https://github.com/EasyRPG/TestGame), Ordner `TestGame-2000`) | Bibliothek → „Eigene Spieldateien" zeigt „Spielbar in Akeno (RPG Maker 2000/2003)" | Erkennung auf der Konsole |
+| 12 | Den Eintrag öffnen → „In Akeno spielen" | Akeno schließt sich und startet sich neu; das Spiel erscheint im Vollbild, Kreuz/Kreis/Steuerkreuz bedienen es | **Spielmodus und eingebaute Runtime** |
+| 13 | Im Spiel über das Menü beenden (oder Titelbild → Beenden) | Akeno erscheint wieder und fragt „Wie lief …?" | Rückkehr in den Hub, Kompatibilitätsbericht |
+| 14 | Bibliothek → Spiel (□) → „Hauptmenü-Kachel anlegen", dann die Kachel im PS5-Hauptmenü starten | Das Spiel startet direkt, ohne den Hub | Kachel pro Spiel |
+| 15 | Einstellungen → itch.io-Konto → Schlüssel (Datei `/data/akeno/itch-api-key.txt` oder eintippen); dann Store → „RPG Maker" → ein Spiel → Installieren | Download, „Engine wird erkannt", Fertig; „Spielen" startet es in Akeno | itch.io-API und Installation |
 
 Für Online-Spiele (z. B. PokeMMO Prospero) gilt zusätzlich: Login, Verbindung zum Server und
 Mehrspieler müssen im jeweiligen Spiel geprüft werden; Akeno belegt nur die Installation.
 
-Schritte 11–14 schreiben in die Datenordner anderer Apps (`/data/ps5webkit/open-url.txt` nur bei
-langen Adressen, `/data/ps5proton/...` bei MihawkOS-Installationen) – jeweils erst nach deiner
-Bestätigung in Akeno.
+Akeno schreibt dabei nur in seine eigenen Ordner (`/data/akeno`, für Kacheln `/data/homebrew/PPSA905xx`).
+Bei einem Fehler im Spielmodus schreibt Akeno `/data/akeno/launch/play-error.txt` und zeigt den Grund
+nach der Rückkehr an; das Protokoll des Players liegt in `/data/akeno/library/<id>/config`.
 
 ## Auf dem Entwicklungsrechner (Linux)
 

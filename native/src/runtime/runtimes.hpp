@@ -1,10 +1,10 @@
-// Akeno Gaming Hub - universal runtimes: format detection and routing to PS5 runtime titles.
+// Akeno Gaming Hub - Akeno's own integrated runtimes and game format detection.
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
-// Akeno does not reimplement emulators, Wine or a browser. Each runtime is an existing
-// PS5 title from the signed ProsperoStore catalog; Akeno detects what a file is, picks the
-// runtime titles that handle it, installs them like any other title and starts them
-// through the console's ELF loader.
+// A game runs inside Akeno: the hub restarts its own title in play mode (src/play) and an
+// integrated runtime takes the screen, the controller and the audio output. Akeno does not
+// hand games to other applications. Each runtime below says honestly whether it is part of
+// this build or still planned, and which open-source project it builds on.
 #pragma once
 
 #include <cstdint>
@@ -14,40 +14,42 @@
 namespace akeno
 {
 
-enum class LaunchArgs
+enum class RuntimeState
 {
-    None,        // the runtime opens its own library/file browser
-    MihawkPath,  // MihawkOS: profile=<id> or path=<Windows path> (src/pw_wine_launch.h)
-    Url,         // Parallax Browser: a launch argument with "://" is its start page (ps5browser.c)
+    Integrated, // compiled into this Akeno build
+    Planned,    // designed, not built yet
 };
 
 struct RuntimeInfo
 {
-    const char *key;      // runtime family: web, windows, retroarch, n64, ...
-    const char *name;     // display name of the runtime title
-    const char *title_id; // its PS5 title ID in the ProsperoStore catalog
-    const char *summary;  // what it runs
-    LaunchArgs args = LaunchArgs::None;
+    const char *id;      // easyrpg, native, windows, linux, java, html5, godot, unity, renpy, python, dotnet, gamemaker, retro
+    const char *name;    // shown in the runtime manager
+    const char *engines; // what it runs
+    const char *basis;   // the project and licence it builds on
+    const char *detail;  // current state in plain words
+    RuntimeState state;
 };
 
-const std::vector<RuntimeInfo> &runtime_registry();
-// Runtime titles for a runtime family, best first.
-std::vector<const RuntimeInfo *> runtimes_for(const std::string &family);
-const RuntimeInfo *runtime_by_title(const std::string &title_id);
+const std::vector<RuntimeInfo> &akeno_runtimes();
+const RuntimeInfo *runtime_by_id(const std::string &id);
+bool runtime_integrated(const std::string &id);
 
 struct Detection
 {
-    std::string family;   // runtime family to route to; empty when nothing matched
-    std::string format;   // e.g. "Nintendo 64 ROM", "Windows PE (x86-64)"
-    std::string engine;   // e.g. "Ren'Py", "Godot 4", "RPG Maker MV"
-    std::string evidence; // what was read to decide
-    std::string advice;   // when no PS5 runtime exists: what would work instead
+    std::string engine;      // machine id: rpgmaker2k, rpgmakermv, renpy, godot, unity, html5, windows-x64, linux-elf, java, rom-nes ...
+    std::string engine_name; // e.g. "RPG Maker 2000/2003"
+    std::string format;      // e.g. "Windows-Programm (x86-64)"
+    std::string evidence;    // what was read to decide
+    std::string runtime;     // the Akeno runtime that runs it, empty when none is designed
+    std::string root;        // for folders: where the game itself starts (e.g. the folder with RPG_RT.ldb)
+    bool playable = false;   // that runtime is integrated in this build
+    std::string advice;      // when not playable: why, and what is missing
 };
 
-// Reads only file headers (never executes anything). `path` may be a file or a folder.
+// Reads only file headers and folder layouts (never executes anything).
 Detection detect_game(const std::string &path);
 
-// User files below the import folders (ROMs, ISOs, game folders), each with its detection.
+// User files below the import folders (own games, ROMs, ISOs), each with its detection.
 struct LocalGame
 {
     std::string path;

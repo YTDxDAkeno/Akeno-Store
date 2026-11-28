@@ -19,6 +19,7 @@
 #include <time.h>
 #include <unistd.h>
 #include <wchar.h>
+#include <wctype.h>
 #include <xlocale.h>
 
 int _Getmbcurmax(void);
@@ -42,6 +43,100 @@ int freelocale(locale_t locale)
 {
     (void)locale;
     return 0;
+}
+
+/* Only the "C" locale exists: newlocale hands out that one for every name, so libc++'s named
+ * facets (std::locale, iostreams, EasyRPG's string streams) construct instead of throwing. */
+locale_t newlocale(int mask, const char *name, locale_t base)
+{
+    (void)mask;
+    (void)name;
+    (void)base;
+    return (locale_t)&_DefaultRuneLocale;
+}
+
+int strcoll_l(const char *a, const char *b, locale_t locale)
+{
+    (void)locale;
+    return strcmp(a, b);
+}
+
+size_t strxfrm_l(char *out, const char *string, size_t size, locale_t locale)
+{
+    (void)locale;
+    const size_t length = strlen(string);
+    if (size)
+    {
+        const size_t copy = length < size - 1 ? length : size - 1;
+        memcpy(out, string, copy);
+        out[copy] = '\0';
+    }
+    return length;
+}
+
+int wcscoll_l(const wchar_t *a, const wchar_t *b, locale_t locale)
+{
+    (void)locale;
+    return wcscmp(a, b);
+}
+
+size_t wcsxfrm_l(wchar_t *out, const wchar_t *string, size_t size, locale_t locale)
+{
+    (void)locale;
+    const size_t length = wcslen(string);
+    if (size)
+    {
+        const size_t copy = length < size - 1 ? length : size - 1;
+        memcpy(out, string, copy * sizeof(wchar_t));
+        out[copy] = L'\0';
+    }
+    return length;
+}
+
+unsigned long ___runetype_l(__ct_rune_t c, locale_t locale)
+{
+    (void)locale;
+    return c >= 0 && c < _CACHED_RUNES ? _DefaultRuneLocale.__runetype[c] : 0;
+}
+
+__ct_rune_t ___toupper_l(__ct_rune_t c, locale_t locale)
+{
+    (void)locale;
+    return c >= 0 && c < _CACHED_RUNES ? _DefaultRuneLocale.__mapupper[c] : c;
+}
+
+__ct_rune_t ___tolower_l(__ct_rune_t c, locale_t locale)
+{
+    (void)locale;
+    return c >= 0 && c < _CACHED_RUNES ? _DefaultRuneLocale.__maplower[c] : c;
+}
+
+int iswctype_l(wint_t c, wctype_t type, locale_t locale)
+{
+    (void)locale;
+    return c >= 0 && c < _CACHED_RUNES ? (_DefaultRuneLocale.__runetype[c] & type) != 0 : 0;
+}
+
+wint_t btowc_l(int c, locale_t locale)
+{
+    (void)locale;
+    return c >= 0 && c < 0x80 ? (wint_t)c : WEOF;
+}
+
+int wctob_l(wint_t c, locale_t locale)
+{
+    (void)locale;
+    return c < 0x80 ? (int)c : EOF;
+}
+
+struct lconv *localeconv_l(locale_t locale)
+{
+    (void)locale;
+    static char point[] = ".", empty[] = "";
+    static struct lconv c_locale = {point, empty, empty, empty, empty, empty, empty, empty, empty, empty,
+                                    CHAR_MAX, CHAR_MAX, CHAR_MAX, CHAR_MAX, CHAR_MAX, CHAR_MAX, CHAR_MAX,
+                                    CHAR_MAX, CHAR_MAX, CHAR_MAX, CHAR_MAX, CHAR_MAX, CHAR_MAX, CHAR_MAX};
+    return &c_locale;
 }
 
 double strtod_l(const char *string, char **end, locale_t locale)

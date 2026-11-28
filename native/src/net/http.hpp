@@ -67,6 +67,11 @@ class Client
     // server honours it and 200 (the whole file again) when it does not.
     Response download(const std::string &url, const Sink &sink, Cancel *cancel = nullptr,
                       std::uint64_t limit = 8ull * 1024 * 1024 * 1024, std::uint64_t offset = 0);
+    // One request without following redirects (the caller reads `location`), HTTPS only.
+    // Used to turn an authenticated API download link into the store's signed file address
+    // without the credential ever leaving the API host.
+    Response once(const std::string &url, const std::vector<std::pair<std::string, std::string>> &headers = {},
+                  std::uint64_t limit = 1024 * 1024);
     const char *transport_name() const { return transport_->name(); }
 
     static const char *user_agent();

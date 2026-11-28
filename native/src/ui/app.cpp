@@ -6,6 +6,7 @@
 #include "core/json.hpp"
 #include "core/util.hpp"
 #include "platform/platform.hpp"
+#include "play/play.hpp"
 #include "runtime/launch.hpp"
 
 #include "qrcodegen.h"
@@ -54,14 +55,17 @@ constexpr float kLibraryTile = 196;
 enum ActionKind
 {
     kInstall = 1,
-    kStart,
+    kStart,     // a native PS5 title
+    kPlay,      // a game in Akeno's library, in Akeno's play mode
     kUninstall,
-    kPlayBrowser,
     kStorePage,
-    kInstallRuntime,
-    kOpenRuntime,
     kRate,
+    kShortcut,
+    kItchSetup,
 };
+
+std::string secrets_dir() { return fs::join(platform::data_dir(), "secrets"); }
+std::string itch_key_path() { return fs::join(secrets_dir(), "itch-api-key"); }
 
 float approach(float current, float target, float dt, float speed = 12)
 {
@@ -79,15 +83,6 @@ const char *tab_label(int tab)
 {
     static const char *labels[] = {"Entdecken", "Store", "Bibliothek", "Runtimes", "Downloads", "Diagnose", "Einstellungen"};
     return labels[tab];
-}
-
-std::string initials(const std::string &title)
-{
-    std::string out;
-    for (const std::string &word : split(title, ' '))
-        if (!word.empty() && out.size() < 2 && std::isalnum(static_cast<unsigned char>(word[0])))
-            out += static_cast<char>(std::toupper(static_cast<unsigned char>(word[0])));
-    return out.empty() ? "?" : out;
 }
 
 Color provider_color(const std::string &provider)
@@ -130,18 +125,10 @@ Color compat_color(Compat compat)
     return theme::muted;
 }
 
-std::string family_label(const std::string &family)
+std::string runtime_name(const std::string &id)
 {
-    static const std::map<std::string, std::string> labels = {
-        {"web", "Web / HTML5"},      {"windows", "Windows"},       {"retro", "Retro-Konsolen"},
-        {"arcade", "Arcade"},        {"pce", "PC Engine"},         {"atari", "Atari"},
-        {"n64", "Nintendo 64"},      {"psx", "PlayStation 1"},     {"ps2", "PlayStation 2"},
-        {"psp", "PSP"},              {"gamecube", "GameCube/Wii"}, {"dreamcast", "Dreamcast"},
-        {"saturn", "Sega Saturn"},   {"xbox", "Xbox"},             {"xbox360", "Xbox 360"},
-        {"switch", "Switch"},        {"nds", "DS/3DS/Wii U"},      {"flash", "Flash"},
-        {"j2me", "Java ME"},         {"pico8", "PICO-8"},          {"c64", "Commodore 64"}};
-    const auto it = labels.find(family);
-    return it == labels.end() ? family : it->second;
+    const RuntimeInfo *info = runtime_by_id(id);
+    return info ? info->name : id;
 }
 
 } // namespace
@@ -185,7 +172,8 @@ bool Settings::save(const std::string &path) const
 
 // ---------------------------------------------------------------------------------------
 
-App::App(Gfx &gfx, std::string asset_dir) : gfx_(gfx), asset_dir_(std::move(asset_dir))
+App::App(Gfx &gfx, std::string asset_dir, std::string returned_from)
+    : gfx_(gfx), asset_dir_(std::move(asset_dir)), returned_(std::move(returned_from))
 {
     settings_path_ = fs::join(platform::data_dir(), "settings.json");
     settings_.load(settings_path_);
@@ -208,6 +196,9 @@ App::App(Gfx &gfx, std::string asset_dir) : gfx_(gfx), asset_dir_(std::move(asse
     providers.push_back(make_epic_provider());
     if (!settings_.github_repositories.empty())
         providers.push_back(make_github_provider(settings_.github_repositories));
+    if (const auto key = fs::read_file(itch_key_path(), 4096))
+        itch_key_ = trim(*key);
+    context.itch_key = itch_key_;
     catalog_ = std::make_unique<Catalog>(context, std::move(providers));
     for (const std::string &id : settings_.disabled_providers)
         catalog_->set_enabled(id, false);
@@ -222,7 +213,9 @@ App::App(Gfx &gfx, std::string asset_dir) : gfx_(gfx), asset_dir_(std::move(asse
     roots_ = platform::install_roots();
     settings_.root = std::clamp(settings_.root, 0, static_cast<int>(roots_.size()) - 1);
 
-    filters_ = {{"Alles", "all"},
+    filters_ = {{"In Akeno spielbar", "playable"},
+                {"Alles", "all"},
+                {"RPG Maker", "rpgmaker"},
                 {"Kostenlos", "free"},
                 {"Online & Multiplayer", "online"},
                 {"Singleplayer", "singleplayer"},
@@ -231,8 +224,8 @@ App::App(Gfx &gfx, std::string asset_dir) : gfx_(gfx), asset_dir_(std::move(asse
                 {"PS5-Titel", "ps5"},
                 {"Recomps & Ports", "recomp"},
                 {"Emulatoren", "emulator"},
-                {"Im Browser spielbar", "browser"},
-                {"Windows (MihawkOS)", "windows"},
+                {"HTML5 (Runtime fehlt)", "browser"},
+                {"Windows (Runtime fehlt)", "windows"},
                 {"Kostenlos für PC", "pc-free"},
                 {"Visual Novels", "vn"},
                 {"Getestet", "tested"},
@@ -329,8 +322,7 @@ void App::sync_data()
         for (const auto &root : roots_)
             paths.push_back(root.path);
         installed_ = library_->scan(paths);
-        for (InstalledTitle &game : Library::scan_mihawk(platform::mihawk_root()))
-            installed_.push_back(std::move(game));
+        profiles_ = list_profiles();
         local_ = scan_local_games(platform::import_dirs());
         rebuild_shelves();
     }
@@ -348,8 +340,6 @@ int App::game_index_by_id(const std::string &id) const
 
 int App::game_index_for(const InstalledTitle &title) const
 {
-    if (title.windows)
-        return game_index_by_id(title.source_game_id);
     const int by_title = game_index_by_title(title.title_id);
     return by_title >= 0 ? by_title : game_index_by_id(title.source_game_id);
 }
@@ -366,13 +356,6 @@ int App::game_index_by_title(const std::string &title_id) const
 
 const InstalledTitle *App::installed_for(const Game &game) const
 {
-    if (game.runtime == "windows" && !game.profile.empty())
-    {
-        for (const InstalledTitle &title : installed_)
-            if (title.windows && title.profile == game.profile)
-                return &title;
-        return nullptr;
-    }
     if (game.title_id.empty())
         return nullptr;
     for (const InstalledTitle &title : installed_)
@@ -381,26 +364,59 @@ const InstalledTitle *App::installed_for(const Game &game) const
     return nullptr;
 }
 
-bool App::update_available(const Game &game, const InstalledTitle &title) const
+const GameProfile *App::profile_for(const Game &game) const
 {
-    if (title.windows) // a release tag: only known once the entry was resolved
-        return game.resolved && !game.version.empty() && !title.content_version.empty() &&
-               game.version != title.content_version;
-    bool comparable = false;
-    return compare_content_version(game.content_version, title.content_version, &comparable) > 0 && comparable;
+    if (game.runtime != "akeno")
+        return nullptr;
+    for (const GameProfile &profile : profiles_)
+        if (profile.id == game.profile || (!game.id.empty() && profile.source == game.id))
+            return &profile;
+    return nullptr;
 }
 
-bool App::runtime_installed(const std::string &family, const RuntimeInfo **which) const
+Compat App::shown_compat(const Game &game, std::string *note) const
 {
-    for (const RuntimeInfo *info : runtimes_for(family))
-        for (const InstalledTitle &title : installed_)
-            if (title.title_id == info->title_id)
-            {
-                if (which)
-                    *which = info;
-                return true;
-            }
-    return false;
+    if (const CompatReport *report = compat_->find(game.id))
+        return report->status;
+    // Only what Akeno can run itself counts; a game for a missing runtime is not compatible yet.
+    if (game.access == Access::Runtime || (game.access == Access::External && game.runtime != "native"))
+    {
+        if (note && game.compat_note.empty())
+            *note = "Akenos Runtime für " + runtime_label(game) + " ist noch nicht integriert.";
+        else if (note)
+            *note = game.compat_note;
+        return game.compat == Compat::Untested ? Compat::Incompatible : game.compat;
+    }
+    if (note)
+        *note = game.compat_note;
+    return game.compat;
+}
+
+std::string App::runtime_label(const Game &game) const
+{
+    if (game.runtime == "native")
+        return "Nativer PS5-Titel";
+    if (game.runtime == "akeno")
+    {
+        if (const GameProfile *profile = profile_for(game))
+            return "In Akeno: " + runtime_name(profile->runtime);
+        return game.engine_hint == "rpgmaker2k" ? "In Akeno: RPG Maker 2000/2003" : "In Akeno";
+    }
+    if (game.runtime == "web")
+        return "HTML5";
+    if (game.runtime == "windows")
+        return "Windows";
+    if (game.runtime == "java")
+        return "Java";
+    if (game.runtime == "linux")
+        return "Linux";
+    return "PC";
+}
+
+bool App::update_available(const Game &game, const InstalledTitle &title) const
+{
+    bool comparable = false;
+    return compare_content_version(game.content_version, title.content_version, &comparable) > 0 && comparable;
 }
 
 std::vector<int> App::filter_games(const std::string &key, const std::string &query) const
@@ -412,6 +428,10 @@ std::vector<int> App::filter_games(const std::string &key, const std::string &qu
         bool keep = false;
         if (key == "all")
             keep = true;
+        else if (key == "playable")
+            keep = g.access == Access::Install && g.kind == "game" && (g.runtime == "native" || g.runtime == "akeno");
+        else if (key == "rpgmaker")
+            keep = g.has_tag("rpgmaker") || g.engine_hint == "rpgmaker2k";
         else if (key == "ps5")
             keep = g.access == Access::Install;
         else if (key == "recomp")
@@ -419,7 +439,7 @@ std::vector<int> App::filter_games(const std::string &key, const std::string &qu
         else if (key == "emulator")
             keep = g.has_tag("emulator");
         else if (key == "browser")
-            keep = g.access == Access::Runtime;
+            keep = g.runtime == "web";
         else if (key == "pc-free")
             keep = g.has_tag("pc") && g.free;
         else if (key == "vn")
@@ -437,7 +457,7 @@ std::vector<int> App::filter_games(const std::string &key, const std::string &qu
         else if (key == "indie")
             keep = g.has_tag("indie");
         else if (key == "windows")
-            keep = g.runtime == "windows" && g.access == Access::Install;
+            keep = g.runtime == "windows";
         else if (key == "tested")
             keep = compat_->find(g.id) != nullptr || g.compat != Compat::Untested;
         else if (starts_with(key, "provider:"))
@@ -488,18 +508,23 @@ void App::rebuild_shelves()
             shelves_.push_back({std::move(title), std::move(subtitle), std::move(items)});
     };
     add("Updates verfügbar", "Neuere Versionen deiner installierten Titel", updates);
-    add("Online & Multiplayer", "Offizielle und Community-Server – nativ, im Browser oder über MihawkOS",
+    std::vector<int> mine;
+    for (std::size_t i = 0; i < games_.size(); ++i)
+        if (profile_for(games_[i]))
+            mine.push_back(static_cast<int>(i));
+    add("In deiner Akeno-Bibliothek", "Startet direkt in Akeno – ohne andere Apps", mine);
+    add("RPG Maker 2000/2003 für Akeno", "Kostenlos von itch.io; Akeno prüft nach dem Download die Engine und spielt sie selbst",
+        take(filter_games("rpgmaker", ""), 24));
+    add("Online & Multiplayer", "Native PS5-Ports mit offiziellen oder Community-Servern",
         take(filter_games("online", ""), 24));
     add("Fanprojekte", "Von Fans gemachte Spiele und Clients", take(filter_games("fan", ""), 24));
     add("Neu & aktualisiert", "Native PS5-Titel aus dem signierten ProsperoStore-Katalog", take(newest, 24));
     add("Spiele für die PS5", "Ports, Homebrew und Fanprojekte zum direkten Installieren", take(games_only, 24));
     add("Recomps & Ports", "Mit eigenem, rechtmäßig erworbenem Original", take(filter_games("recomp", ""), 24));
     add("Emulatoren & Runtimes", "Gemeinsame Laufzeiten für ganze Plattformen", take(filter_games("emulator", ""), 24));
-    add("Im Browser spielbar", "itch.io und Game Jolt – startet in ProsperoWeb", take(filter_games("browser", ""), 24));
+    add("HTML5-Spiele", "Warten auf Akenos HTML5-Runtime – noch nicht spielbar", take(filter_games("browser", ""), 24));
     add("Visual Novels", "Erzählspiele von itch.io", take(filter_games("vn", ""), 24));
-    add("Windows-Spiele für MihawkOS", "Freie Spiele mit geprüftem GitHub-Download – landen in C:\\Games",
-        take(filter_games("windows", ""), 24));
-    add("Kostenlos für PC", "GOG und Epic Games – über die Windows-Runtimes", take(filter_games("pc-free", ""), 24));
+    add("Kostenlos für PC", "GOG und Epic Games – warten auf Akenos Windows-Runtime", take(filter_games("pc-free", ""), 24));
     for (std::size_t i = 0; i < shelves_.size() && i < focus.size(); ++i)
         shelves_[i].focus = std::min(focus[i], static_cast<int>(shelves_[i].items.size()) - 1);
     row_ = std::clamp(keep_row, 0, static_cast<int>(shelves_.size()));
@@ -528,92 +553,51 @@ std::string App::artwork(const Game &game) const
 std::vector<App::Action> App::actions_for(const Game &game) const
 {
     std::vector<Action> actions;
-    const InstalledTitle *installed = installed_for(game);
-    const RuntimeInfo *mihawk = nullptr;
-    switch (game.access)
+    if (game.access == Access::Install && game.runtime == "akeno")
     {
-    case Access::Install:
-        if (game.runtime == "windows")
+        // A game Akeno plays itself with an integrated runtime.
+        if (profile_for(game))
         {
-            // A Windows build for MihawkOS's library: MihawkOS itself must be there.
-            const bool have_mihawk = runtime_installed("windows", &mihawk) && mihawk &&
-                                     std::string(mihawk->title_id) == "PPSA99170";
-            if (installed)
-            {
-                actions.push_back({"In MihawkOS starten", kStart});
-                actions.push_back({update_available(game, *installed) ? "Aktualisieren" : "Neu installieren", kInstall});
-                actions.push_back({"Deinstallieren", kUninstall});
-            }
-            else if (have_mihawk || [&] {
-                         for (const InstalledTitle &t : installed_)
-                             if (t.title_id == "PPSA99170")
-                                 return true;
-                         return false;
-                     }())
-                actions.push_back({"In MihawkOS installieren", kInstall});
-            else
-                actions.push_back({"MihawkOS installieren", kInstallRuntime});
-            break;
+            actions.push_back({"Spielen", kPlay});
+            actions.push_back({"Hauptmenü-Kachel", kShortcut});
+            actions.push_back({"Neu installieren", kInstall});
+            actions.push_back({"Deinstallieren", kUninstall});
         }
+        else if (game.provider == "itch" && itch_key_.empty())
+            actions.push_back({"itch.io-Konto verbinden", kItchSetup});
+        else
+            actions.push_back({"Installieren", kInstall});
+    }
+    else if (game.access == Access::Install)
+    {
+        const InstalledTitle *installed = installed_for(game);
         if (installed)
         {
             actions.push_back({"Starten", kStart});
-            if (update_available(game, *installed))
-                actions.push_back({"Aktualisieren", kInstall});
-            else
-                actions.push_back({"Neu installieren", kInstall});
+            actions.push_back({update_available(game, *installed) ? "Aktualisieren" : "Neu installieren", kInstall});
             actions.push_back({"Deinstallieren", kUninstall});
         }
         else
             actions.push_back({"Installieren", kInstall});
-        break;
-    case Access::Runtime:
-    {
-        const RuntimeInfo *web = nullptr;
-        if (runtime_installed(game.runtime, &web))
-            actions.push_back({std::string("In ") + web->name + " spielen", kPlayBrowser});
-        else
-            actions.push_back({std::string(runtimes_for(game.runtime).empty() ? "Runtime"
-                                                                             : runtimes_for(game.runtime)[0]->name) +
-                                   " installieren",
-                               kInstallRuntime});
-        break;
     }
-    case Access::External:
-    case Access::Upcoming:
-        break;
-    }
-    if (game.kind == "game" && (installed || game.access == Access::Runtime || compat_->find(game.id)))
+    if (game.kind == "game" && (installed_for(game) || profile_for(game) || compat_->find(game.id)))
         actions.push_back({compat_->find(game.id) ? "Testbericht ändern" : "Kompatibilität bewerten", kRate});
     if (!game.page_url.empty())
-        actions.push_back({"Store-Seite (QR)", kStorePage});
-    if (game.access == Access::External && game.runtime == "windows")
-    {
-        if (runtime_installed("windows", nullptr))
-            actions.push_back({"Windows-Runtime öffnen", kOpenRuntime});
-        else
-            actions.push_back({"Windows-Runtime installieren", kInstallRuntime});
-    }
+        actions.push_back({"Projektseite (QR)", kStorePage});
     return actions;
 }
 
 void App::install(const Game &game)
 {
-    if (game.runtime == "windows")
+    if (game.runtime == "akeno")
     {
-        // Into MihawkOS's library: say where it goes before anything is downloaded.
-        const Game copy = game;
-        const std::string root = platform::mihawk_root();
-        open_menu("In MihawkOS installieren?",
-                  copy.title + " wird von " + copy.source_repo +
-                      " geladen (nur mit von GitHub veröffentlichtem SHA-256) und nach C:\\Games\\" + copy.folder_name +
-                      " entpackt, also " + fs::join(mihawk_drive_c(root), "Games/" + copy.folder_name) +
-                      ". Der Eintrag erscheint in MihawkOS als \"" + copy.title + "\".",
-                  {{"Installieren", [this, copy, root] {
-                        installer_->install(copy, root);
-                        toast("Zur Warteschlange hinzugefügt", copy.title + " (MihawkOS)");
-                    }},
-                   {"Abbrechen", [] {}}});
+        if (!fs::writable(platform::data_dir()))
+        {
+            toast("Kein Schreibzugriff", "Akenos Datenordner ist nicht beschreibbar (ShadowMountPlus 1.7+ nötig)", true);
+            return;
+        }
+        installer_->install(game, library_root());
+        toast("Zur Warteschlange hinzugefügt", game.title + " – Akeno erkennt die Engine nach dem Download");
         return;
     }
     if (roots_.empty() || !roots_[static_cast<std::size_t>(settings_.root)].writable)
@@ -642,49 +626,135 @@ void App::launch(const std::string &title_id, const std::vector<std::string> &ar
     quit_ = true; // the payload starts the title once Akeno has closed
 }
 
-void App::launch_windows(const InstalledTitle &title)
+void App::play(const GameProfile &profile)
 {
-    bool have = false;
-    for (const InstalledTitle &t : installed_)
-        have = have || t.title_id == "PPSA99170";
-    if (!have)
+    if (!play::runtime_built(profile.runtime))
     {
-        toast("MihawkOS fehlt", "Installiere MihawkOS (PPSA99170) aus dem ProsperoStore", true);
+        toast("Nicht spielbar", "Die Akeno-Runtime " + runtime_name(profile.runtime) + " fehlt in diesem Build", true);
         return;
     }
-    const int index = game_index_for(title);
-    launch("PPSA99170", {"profile=" + title.profile}, title.name + " (MihawkOS)",
-           index >= 0 ? &games_[static_cast<std::size_t>(index)] : nullptr, "MihawkOS");
+    // Akeno restarts its own title in play mode; the game runs inside Akeno, full screen.
+    compat_->set_pending({profile.source.empty() ? "library:" + profile.id : profile.source, profile.title,
+                          runtime_name(profile.runtime), platform::unix_time()});
+    toast("Wird gestartet", profile.title + " – " + runtime_name(profile.runtime));
+    play_request_ = profile.id;
+    quit_ = true;
 }
 
-void App::play_web(const Game &game)
+void App::profile_menu(const GameProfile &profile)
 {
-    const RuntimeInfo *web = nullptr;
-    if (!runtime_installed("web", &web) || !web)
-        return;
-    const std::string url = game.launch_url, name = game.title, id = web->title_id, browser = web->name;
-    if (web->args == LaunchArgs::Url)
+    const GameProfile copy = profile;
+    std::vector<MenuItem> items;
+    items.push_back({"Spielen", [this, copy] { play(copy); }});
+    items.push_back({"Hauptmenü-Kachel anlegen", [this, copy] { add_shortcut(copy); }});
+    items.push_back({"Kompatibilität bewerten", [this, copy] {
+                         rate_menu(copy.source.empty() ? "library:" + copy.id : copy.source);
+                     }});
+    items.push_back({copy.owned_files ? "Deinstallieren" : "Aus der Bibliothek entfernen", [this, copy] {
+                         installer_->uninstall_library(copy.id, copy.title);
+                         toast("Wird entfernt", copy.title + " – Spielstände bleiben erhalten");
+                     }});
+    items.push_back({"Abbrechen", [] {}});
+    const RuntimeInfo *runtime = runtime_by_id(copy.runtime);
+    open_menu(copy.title,
+              std::string(runtime ? runtime->name : copy.runtime.c_str()) + " · in Akeno\nDateien: " + copy.folder +
+                  "\nSpielstände: " + copy.saves +
+                  (copy.owned_files ? "\nVon Akeno heruntergeladen" : "\nEigene Dateien (werden nicht gelöscht)"),
+              std::move(items));
+}
+
+void App::add_shortcut(const GameProfile &profile)
+{
+    // A home-screen tile that starts Akeno straight into this game (--play=<id>).
+    ShortcutSpec spec;
+    spec.name = profile.title;
+    spec.target = kAkenoTitleId;
+    spec.arguments = {"--play=" + profile.id};
+    const std::string cover = images_->cached_file(profile.cover);
+    if (!cover.empty())
+        if (const auto data = fs::read_file(cover, 16 * 1024 * 1024))
+            decode_image(*data, 1024, 1024, spec.icon);
+    if (spec.icon.width == 0)
+        if (const auto data = fs::read_file(platform::is_console() ? "/app0/sce_sys/icon0.png"
+                                                                    : fs::join(asset_dir_, "../../ps5/sce_sys/icon0.png"),
+                                            8 * 1024 * 1024))
+            decode_image(*data, 512, 512, spec.icon);
+    if (spec.icon.width == 0)
     {
-        // Parallax Browser opens a launch argument with "://" as its start page; longer
-        // addresses go through /data/ps5webkit/open-url.txt, which it reads once and deletes.
-        std::vector<std::string> args;
-        if (url.size() <= 200)
-            args.push_back(url);
-        else if (!fs::make_dirs("/data/ps5webkit") || !fs::write_atomic("/data/ps5webkit/open-url.txt", url + "\n"))
-        {
-            toast("Start nicht möglich", "Die Adresse kann nicht an den Browser übergeben werden", true);
-            return;
-        }
-        launch(id, args, name + " (" + browser + ")", &game, browser);
+        spec.icon.width = spec.icon.height = 2;
+        spec.icon.rgba.assign(4, 0xFFF65C8Bu);
+    }
+    if (roots_.empty())
+    {
+        toast("Kachel nicht möglich", "Kein Installationsort für die Kachel", true);
         return;
     }
-    const Game copy = game;
-    open_menu("Im Browser spielen",
-              browser + " übernimmt keine Startadresse. Öffne dort " + url +
-                  " – oder installiere Parallax Browser, der die Adresse direkt öffnet.",
-              {{browser + " starten", [this, id, name, browser, copy] { launch(id, {}, browser + " (" + name + ")", &copy, browser); }},
-               {"QR-Code anzeigen", [this, name, url] { open_qr(name, url); }},
-               {"Abbrechen", [] {}}});
+    std::string error;
+    const std::string tile = create_shortcut(spec, roots_[static_cast<std::size_t>(settings_.root)].path,
+                                             fs::join(platform::data_dir(), "receipts"), error);
+    if (tile.empty())
+        toast("Kachel fehlgeschlagen", error, true);
+    else
+        toast("Kachel angelegt", profile.title + " erscheint als " + tile + " im Hauptmenü und startet direkt");
+    library_poll_ = 0;
+}
+
+void App::itch_menu()
+{
+    std::vector<MenuItem> items;
+    const std::string file = fs::join(platform::data_dir(), "itch-api-key.txt");
+    items.push_back({"Schlüssel aus Datei lesen", [this, file] {
+                         const auto text = fs::read_file(file, 4096);
+                         std::string error;
+                         if (!text)
+                             toast("Keine Datei", "Lege den Schlüssel als " + file + " ab (z. B. per FTP)", true);
+                         else if (set_itch_key(trim(*text), error))
+                         {
+                             fs::remove_tree(file);
+                             toast("itch.io verbunden", "Der Schlüssel liegt jetzt nur in " + itch_key_path());
+                         }
+                         else
+                             toast("Schlüssel abgelehnt", error, true);
+                     }});
+    items.push_back({"Schlüssel eintippen", [this] {
+                         key_entry_ = true;
+                         query_.clear();
+                         keyboard_ = true;
+                     }});
+    items.push_back({"Schlüssel erstellen (QR zu itch.io)", [this] {
+                         open_qr("itch.io-API-Schlüssel", "https://itch.io/user/settings/api-keys");
+                     }});
+    if (!itch_key_.empty())
+        items.push_back({"Verbindung trennen", [this] {
+                             fs::remove_tree(itch_key_path());
+                             itch_key_.clear();
+                             catalog_->set_itch_key("");
+                             toast("itch.io getrennt", "Der Schlüssel wurde von der Konsole gelöscht");
+                         }});
+    items.push_back({"Abbrechen", [] {}});
+    open_menu("itch.io-Konto",
+              "Akeno lädt itch.io-Spiele über die offizielle itch.io-API mit deinem eigenen API-Schlüssel. "
+              "Er bleibt auf der Konsole (" + itch_key_path() + ") und geht nur an api.itch.io." +
+                  std::string(itch_key_.empty() ? "\nStatus: nicht verbunden" : "\nStatus: verbunden"),
+              std::move(items));
+}
+
+bool App::set_itch_key(const std::string &key, std::string &error)
+{
+    if (key.size() < 20 || key.size() > 128 || key.find_first_of(" \t\r\n") != std::string::npos)
+    {
+        error = "Das sieht nicht wie ein itch.io-API-Schlüssel aus";
+        return false;
+    }
+    fs::make_dirs(secrets_dir(), 0700);
+    if (!fs::write_atomic(itch_key_path(), key + "\n"))
+    {
+        error = itch_key_path() + " ist nicht beschreibbar";
+        return false;
+    }
+    itch_key_ = key;
+    catalog_->set_itch_key(key);
+    return true;
 }
 
 void App::run_action(const Game &game, int kind)
@@ -695,19 +765,34 @@ void App::run_action(const Game &game, int kind)
         install(game);
         break;
     case kStart:
-        if (const InstalledTitle *title = installed_for(game); title && title->windows)
-            launch_windows(*title);
-        else
-            launch(game.title_id, {}, game.title, &game, "PS5-Titel");
+        launch(game.title_id, {}, game.title, &game, "PS5-Titel");
+        break;
+    case kPlay:
+        if (const GameProfile *profile = profile_for(game))
+            play(*profile);
+        break;
+    case kShortcut:
+        if (const GameProfile *profile = profile_for(game))
+            add_shortcut(*profile);
+        break;
+    case kItchSetup:
+        itch_menu();
         break;
     case kUninstall:
-        if (const InstalledTitle *title = installed_for(game))
+        if (const GameProfile *profile = profile_for(game))
+        {
+            const GameProfile copy = *profile;
+            open_menu("Deinstallieren?", copy.title + " wird aus Akenos Bibliothek entfernt. Spielstände bleiben.",
+                      {{"Deinstallieren", [this, copy] {
+                            installer_->uninstall_library(copy.id, copy.title);
+                            toast("Wird deinstalliert", copy.title);
+                        }},
+                       {"Abbrechen", [] {}}});
+        }
+        else if (const InstalledTitle *title = installed_for(game))
         {
             const InstalledTitle copy = *title;
-            open_menu("Deinstallieren?",
-                      copy.windows ? copy.name + " wird aus MihawkOS entfernt (C:\\Games und der Bibliothekseintrag). "
-                                                 "Spielstände unter C:\\users bleiben."
-                                   : copy.name + " wird mit seinem Ordner entfernt. Spielstände in /download0 bleiben.",
+            open_menu("Deinstallieren?", copy.name + " wird mit seinem Ordner entfernt. Spielstände in /download0 bleiben.",
                       {{"Deinstallieren", [this, copy] {
                             installer_->uninstall(copy);
                             toast("Wird deinstalliert", copy.name);
@@ -715,37 +800,12 @@ void App::run_action(const Game &game, int kind)
                        {"Abbrechen", [] {}}});
         }
         break;
-    case kPlayBrowser:
-        play_web(game);
-        break;
     case kStorePage:
         open_qr(game.title, game.page_url);
         break;
     case kRate:
         rate_menu(game.id);
         break;
-    case kInstallRuntime:
-    {
-        const std::string family = game.access == Access::Runtime ? game.runtime : "windows";
-        for (const RuntimeInfo *info : runtimes_for(family))
-        {
-            const int index = game_index_by_title(info->title_id);
-            if (index >= 0)
-            {
-                install(games_[static_cast<std::size_t>(index)]);
-                return;
-            }
-        }
-        toast("Runtime nicht im Katalog", family_label(family), true);
-        break;
-    }
-    case kOpenRuntime:
-    {
-        const RuntimeInfo *info = nullptr;
-        if (runtime_installed("windows", &info))
-            launch(info->title_id, {}, info->name);
-        break;
-    }
     }
 }
 
@@ -780,15 +840,13 @@ void App::rate_menu(const std::string &game_id, int focus)
         const Game &g = games_[static_cast<std::size_t>(index)];
         const InstalledTitle *installed = installed_for(g);
         report.game_version = installed && !installed->content_version.empty() ? installed->content_version : g.version;
-        const RuntimeInfo *runtime = nullptr;
         if (g.runtime == "native")
             report.runtime = "PS5-Titel";
-        else if (runtime_installed(g.runtime, &runtime) && runtime)
-            report.runtime = runtime->name;
-        if (runtime)
-            for (const InstalledTitle &t : installed_)
-                if (t.title_id == runtime->title_id)
-                    report.runtime_version = t.content_version;
+        else if (const GameProfile *profile = profile_for(g))
+        {
+            report.runtime = runtime_name(profile->runtime);
+            report.runtime_version = "Akeno " AKENO_VERSION;
+        }
     }
     report.firmware = platform::firmware_version();
     const std::string title = report.title.empty() ? game_id : report.title;
@@ -929,39 +987,30 @@ void App::title_menu(const InstalledTitle &title)
 {
     std::vector<MenuItem> items;
     const InstalledTitle copy = title;
-    if (title.windows)
-        items.push_back({"In MihawkOS starten", [this, copy] { launch_windows(copy); }});
-    else
-        items.push_back({"Starten", [this, copy] {
-                             const int index = game_index_for(copy);
-                             launch(copy.title_id, {}, copy.name,
-                                    index >= 0 ? &games_[static_cast<std::size_t>(index)] : nullptr, "PS5-Titel");
-                         }});
+    items.push_back({"Starten", [this, copy] {
+                         const int index = game_index_for(copy);
+                         launch(copy.title_id, {}, copy.name,
+                                index >= 0 ? &games_[static_cast<std::size_t>(index)] : nullptr, "PS5-Titel");
+                     }});
     const int index = game_index_for(title);
     if (index >= 0)
     {
         const Game game = games_[static_cast<std::size_t>(index)];
         if (update_available(game, title))
-            items.push_back({"Aktualisieren auf " + (title.windows ? game.version : game.content_version),
-                             [this, game] { install(game); }});
+            items.push_back({"Aktualisieren auf " + game.content_version, [this, game] { install(game); }});
         items.push_back({"Details im Store", [this, index] { open_detail(index); }});
         if (game.kind == "game")
             items.push_back({"Kompatibilität bewerten", [this, id = game.id] { rate_menu(id); }});
     }
-    if (title.windows ? title.managed : (title.shortcut || title.managed || index >= 0))
+    if (title.shortcut || title.managed || index >= 0)
         items.push_back({"Deinstallieren", [this, copy] {
                              installer_->uninstall(copy);
                              toast("Wird deinstalliert", copy.name);
                          }});
     items.push_back({"Abbrechen", [] {}});
-    std::string text;
-    if (title.windows)
-        text = "Windows-Spiel in MihawkOS · " + title.program + "\nEintrag /data/ps5proton/games/" + title.profile +
-               (title.managed ? "\nVon Akeno installiert" + (title.content_version.empty() ? std::string() : " · " + title.content_version)
-                              : "\nIn MihawkOS angelegt (Akeno startet es nur)");
-    else
-        text = title.title_id + " · Version " + (title.content_version.empty() ? "?" : title.content_version) + "\n" +
-               title.folder + (title.managed ? "\nVon Akeno installiert" : "\nManuell installiert");
+    const std::string text = title.title_id + " · Version " +
+                             (title.content_version.empty() ? "?" : title.content_version) + "\n" + title.folder +
+                             (title.managed ? "\nVon Akeno installiert" : "\nManuell installiert");
     open_menu(title.name, text, std::move(items));
 }
 
@@ -969,63 +1018,49 @@ void App::local_menu(const LocalGame &game)
 {
     std::vector<MenuItem> items;
     const Detection &d = game.detection;
-    std::string text = d.format + (d.engine.empty() ? "" : " · " + d.engine) + "\nErkannt an: " + d.evidence;
-    const RuntimeInfo *runtime = nullptr;
-    if (!d.family.empty() && runtime_installed(d.family, &runtime))
+    std::string text = d.format + (d.engine_name.empty() || d.engine_name == d.format ? "" : " · " + d.engine_name) +
+                       "\nErkannt an: " + d.evidence;
+    if (d.playable)
     {
-        std::vector<std::string> args;
-        if (runtime->args == LaunchArgs::MihawkPath)
-        {
-            std::string windows = "Z:" + game.path;
-            std::replace(windows.begin(), windows.end(), '/', '\\');
-            args.push_back("path=" + windows);
-        }
-        const std::string id = runtime->title_id, name = runtime->name;
-        text += "\nRuntime: " + name + (args.empty() ? " (öffnet ihre eigene Bibliothek)" : " (Start mit path=…)");
-        items.push_back({"Mit " + name + " starten", [this, id, args, name] { launch(id, args, name); }});
-        const std::string label = game.name;
-        items.push_back({"Verknüpfung im Hauptmenü", [this, id, args, label] {
-                             ShortcutSpec spec;
-                             spec.name = label;
-                             spec.target = id;
-                             spec.arguments = args;
-                             // The tile shows the runtime's own icon (its installed sce_sys/icon0.png).
-                             for (const InstalledTitle &installed : installed_)
-                                 if (installed.title_id == id && !installed.icon_path.empty())
-                                     if (const auto png = fs::read_file(installed.icon_path, 8 * 1024 * 1024))
-                                         decode_image(*png, 512, 512, spec.icon);
-                             if (spec.icon.width == 0)
-                             {
-                                 spec.icon.width = spec.icon.height = 2;
-                                 spec.icon.rgba.assign(4, 0xFFF65C8Bu);
-                             }
-                             std::string error;
-                             const std::string tile = create_shortcut(
-                                 spec, roots_[static_cast<std::size_t>(settings_.root)].path,
-                                 fs::join(platform::data_dir(), "receipts"), error);
-                             if (tile.empty())
-                                 toast("Verknüpfung fehlgeschlagen", error, true);
-                             else
-                                 toast("Verknüpfung erstellt", label + " erscheint als " + tile + " im Hauptmenü");
-                             library_poll_ = 0;
+        // Own files are played where they are; Akeno only writes a start profile.
+        GameProfile existing;
+        for (const GameProfile &p : profiles_)
+            if (p.folder == (d.root.empty() ? game.path : d.root))
+                existing = p;
+        const LocalGame copy = game;
+        text += "\nLäuft in Akeno mit " + runtime_name(d.runtime) + ".";
+        const auto make = [this, copy]() -> std::optional<GameProfile> {
+            for (const GameProfile &p : profiles_)
+                if (p.folder == (copy.detection.root.empty() ? copy.path : copy.detection.root))
+                    return p;
+            GameProfile profile;
+            profile.id = make_library_id(copy.name);
+            profile.title = copy.name;
+            profile.engine = copy.detection.engine;
+            profile.runtime = copy.detection.runtime;
+            profile.folder = copy.detection.root.empty() ? copy.path : copy.detection.root;
+            profile.saves = fs::join(library_dir(profile.id), "saves");
+            profile.source = "import";
+            profile.installed = platform::unix_time();
+            if (!write_profile(profile))
+            {
+                toast("Profil nicht angelegt", library_root() + " ist nicht beschreibbar", true);
+                return std::nullopt;
+            }
+            library_poll_ = 0;
+            return profile;
+        };
+        items.push_back({"In Akeno spielen", [this, make] {
+                             if (auto profile = make())
+                                 play(*profile);
+                         }});
+        items.push_back({"Hauptmenü-Kachel anlegen", [this, make] {
+                             if (auto profile = make())
+                                 add_shortcut(*profile);
                          }});
     }
-    else if (!d.family.empty())
-    {
-        for (const RuntimeInfo *info : runtimes_for(d.family))
-        {
-            const int index = game_index_by_title(info->title_id);
-            if (index >= 0)
-            {
-                const Game runtime_game = games_[static_cast<std::size_t>(index)];
-                items.push_back({std::string(info->name) + " installieren", [this, runtime_game] { install(runtime_game); }});
-                break;
-            }
-        }
-        text += "\nBenötigt die Runtime für " + family_label(d.family);
-    }
-    else if (!d.advice.empty())
-        text += "\n" + d.advice;
+    else
+        text += "\n" + (d.advice.empty() ? std::string("Für dieses Format ist keine Akeno-Runtime vorgesehen.") : d.advice);
     items.push_back({"Schließen", [] {}});
     open_menu(game.name, text, std::move(items));
 }
@@ -1244,7 +1279,8 @@ void App::press_store(Button button)
 
 void App::press_library(Button button)
 {
-    const int titles = static_cast<int>(installed_.size());
+    const int games = static_cast<int>(profiles_.size());
+    const int titles = games + static_cast<int>(installed_.size()); // grid: library games, then PS5 titles
     const int count = titles + static_cast<int>(local_.size());
     int &f = library_focus_;
     switch (button)
@@ -1272,9 +1308,18 @@ void App::press_library(Button button)
             ++f;
         break;
     case Button::Cross:
+        if (f < games)
+            play(profiles_[static_cast<std::size_t>(f)]);
+        else if (f < titles)
+            title_menu(installed_[static_cast<std::size_t>(f - games)]);
+        else if (f < count)
+            local_menu(local_[static_cast<std::size_t>(f - titles)]);
+        break;
     case Button::Square:
-        if (f < titles)
-            title_menu(installed_[static_cast<std::size_t>(f)]);
+        if (f < games)
+            profile_menu(profiles_[static_cast<std::size_t>(f)]);
+        else if (f < titles)
+            title_menu(installed_[static_cast<std::size_t>(f - games)]);
         else if (f < count)
             local_menu(local_[static_cast<std::size_t>(f - titles)]);
         break;
@@ -1289,7 +1334,7 @@ void App::press_library(Button button)
 
 void App::press_runtimes(Button button)
 {
-    const int count = static_cast<int>(runtime_registry().size());
+    const int count = static_cast<int>(akeno_runtimes().size());
     if (button == Button::Up)
     {
         if (runtime_focus_ == 0)
@@ -1303,15 +1348,10 @@ void App::press_runtimes(Button button)
         in_tabs_ = true;
     else if (button == Button::Cross)
     {
-        const RuntimeInfo &info = runtime_registry()[static_cast<std::size_t>(runtime_focus_)];
-        for (const InstalledTitle &title : installed_)
-            if (title.title_id == info.title_id)
-                return title_menu(title);
-        const int index = game_index_by_title(info.title_id);
-        if (index >= 0)
-            open_detail(index);
-        else
-            toast("Nicht im Katalog", std::string(info.name) + " ist derzeit nicht gelistet", true);
+        const RuntimeInfo &info = akeno_runtimes()[static_cast<std::size_t>(runtime_focus_)];
+        open_menu(info.name,
+                  std::string(info.engines) + "\n\nGrundlage: " + info.basis + "\n\nStand: " + info.detail,
+                  {{"Schließen", [] {}}});
     }
 }
 
@@ -1345,7 +1385,7 @@ void App::press_downloads(Button button)
 void App::press_settings(Button button)
 {
     const int provider_rows = static_cast<int>(providers_.size());
-    const int count = 6 + provider_rows;
+    const int count = 7 + provider_rows;
     if (button == Button::Up)
     {
         if (settings_focus_ == 0)
@@ -1389,9 +1429,11 @@ void App::press_settings(Button button)
         toast("Updates", queued ? std::to_string(queued) + " Titel zur Warteschlange hinzugefügt"
                                 : "Alle von Akeno installierten Titel sind aktuell");
     }
+    else if (settings_focus_ == 6)
+        itch_menu();
     else
     {
-        ProviderStatus &p = providers_[static_cast<std::size_t>(settings_focus_ - 6)];
+        ProviderStatus &p = providers_[static_cast<std::size_t>(settings_focus_ - 7)];
         p.enabled = !p.enabled;
         catalog_->set_enabled(p.id, p.enabled);
         auto &disabled = settings_.disabled_providers;
@@ -1507,6 +1549,26 @@ void App::press_keyboard(Button button)
     default:
         break;
     }
+    if (key_entry_)
+    {
+        // Typing the itch.io key: lower case, no search; closing the keyboard saves it.
+        for (char &c : query_)
+            c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+        if (query_.size() > 128)
+            query_.resize(128);
+        if (!keyboard_)
+        {
+            key_entry_ = false;
+            std::string error;
+            const std::string key = trim(query_);
+            query_.clear();
+            if (!key.empty() && set_itch_key(key, error))
+                toast("itch.io verbunden", "Schlüssel gespeichert");
+            else if (!key.empty())
+                toast("Schlüssel abgelehnt", error, true);
+        }
+        return;
+    }
     if (query_.size() > 40)
         query_.resize(40);
     filter_ = 0;
@@ -1588,7 +1650,7 @@ void App::update(float dt)
     }
     const float store_target = std::max(0.0f, (store_focus_ / kStoreColumns - 1) * kStoreRow);
     store_scroll_ = approach(store_scroll_, store_target, dt, 12);
-    const int titles = static_cast<int>(installed_.size());
+    const int titles = static_cast<int>(profiles_.size() + installed_.size());
     const float library_target =
         library_focus_ < titles ? std::max(0.0f, (library_focus_ / kLibraryColumns - 1) * 270.0f)
                                 : std::max(0.0f, ((titles + kLibraryColumns - 1) / kLibraryColumns) * 270.0f - 200 +
@@ -1600,7 +1662,16 @@ void App::update(float dt)
     if (!pending_asked_ && menu_.empty() && time_ > 1.5f)
     {
         pending_asked_ = true;
-        ask_pending_report();
+        const std::string error_file = fs::join(platform::data_dir(), "launch/play-error.txt");
+        if (const auto text = fs::read_file(error_file, 4096); text && !returned_.empty())
+        {
+            const auto lines = split(*text, '\n');
+            toast("Spiel konnte nicht starten", lines.size() > 1 ? lines[1] : *text, true);
+            compat_->clear_pending();
+        }
+        else
+            ask_pending_report();
+        fs::remove_tree(error_file);
     }
     for (Toast &t : toasts_)
         t.age += dt;
@@ -1615,7 +1686,7 @@ void App::update(float dt)
             if (job.state == JobState::Done)
                 toast(job.kind == JobKind::Install ? "Installiert" : "Entfernt",
                       job.title + (job.kind != JobKind::Install ? ""
-                                   : job.windows               ? " – steht jetzt in der MihawkOS-Bibliothek"
+                                   : job.library               ? " – in Akenos Bibliothek, bereit zum Spielen"
                                                                : " – ShadowMountPlus registriert den Titel gleich"));
             else if (job.state == JobState::Failed)
                 toast("Fehlgeschlagen: " + job.title, job.error, true);
@@ -1741,35 +1812,49 @@ void App::draw_tile(const Game &game, float x, float y, float size, bool focused
     const Rect r{x + (size - s) / 2, y + (size - s) / 2, s, s};
     if (focused)
         gfx_.glow(r, 26, theme::glow.with_alpha(0.45f * std::min(1.0f, pop * 2)), 22);
-    const Texture *art = images_->get(artwork(game), static_cast<int>(size), static_cast<int>(size), 24);
+    const std::string source = artwork(game);
+    const Texture *art = images_->get(source, static_cast<int>(size), static_cast<int>(size), 24);
     if (art)
         gfx_.image(*art, r);
     else
-    {
-        const Color base = provider_color(game.provider);
-        gfx_.rounded(r, 24, mix(theme::panel_hi, base, 0.35f));
-        gfx_.gradient_v({r.x + 24, r.y + r.h * 0.5f, r.w - 48, r.h * 0.5f - 24}, {0, 0, 0, 0}, {0, 0, 0, 60});
-        gfx_.text(initials(game.title), r.x + r.w / 2, r.y + r.h / 2 - 34, 52, theme::text.with_alpha(0.9f),
-                  Weight::Bold, Align::Center);
-    }
+        draw_missing_cover(game.title, r, 24, !source.empty() && !images_->failed(source));
     // Status badge.
     const InstalledTitle *installed = installed_for(game);
     std::string badge;
     Color fill{0, 0, 0, 170}, ink = theme::text;
     if (installed && update_available(game, *installed))
         badge = "Update", fill = theme::warn, ink = {40, 25, 0};
-    else if (installed)
+    else if (installed || profile_for(game))
         badge = "Installiert", fill = theme::ok, ink = {0, 40, 25};
+    else if (game.access == Access::Install && game.runtime == "akeno")
+        badge = game.engine_hint == "rpgmaker2k" ? "RPG Maker · Akeno" : "Akeno-Runtime", fill = theme::accent.with_alpha(0.95f);
     else if (game.access == Access::Runtime)
-        badge = "Browser";
+        badge = "HTML5 · fehlt";
     else if (game.access == Access::Upcoming)
         badge = "Demnächst";
     else if (game.access == Access::External)
-        badge = game.has_tag("giveaway") ? "Gratis" : "PC";
+        badge = game.has_tag("giveaway") ? "Gratis · PC" : "Nicht unterstützt";
     if (!badge.empty())
         draw_badge(badge, r.x + 12, r.y + 12, fill, ink);
     if (focused)
         gfx_.rounded_outline(r, 24, 3, {255, 255, 255, static_cast<std::uint8_t>(200 * std::min(1.0f, pop * 2))});
+}
+
+void App::draw_missing_cover(const std::string &title, const Rect &r, float radius, bool loading)
+{
+    // No generated letter art: while the store's picture loads the tile stays neutral; when the
+    // store has none (or it cannot be read), the tile says so next to the game's name.
+    gfx_.rounded(r, radius, theme::panel_hi);
+    gfx_.gradient_v({r.x + radius, r.y + r.h * 0.45f, r.w - 2 * radius, r.h * 0.55f - radius}, {0, 0, 0, 0},
+                    {0, 0, 0, 70});
+    if (loading)
+        return;
+    const float pad = std::max(12.0f, r.w * 0.08f);
+    const float top = r.w > 300 ? pad : pad + 34; // room for a status badge in the corner
+    gfx_.paragraph(title, {r.x + pad, r.y + top, r.w - 2 * pad, r.h * 0.6f}, r.w > 300 ? 30 : 21,
+                   theme::text.with_alpha(0.92f), 3);
+    gfx_.text("Kein Cover vom Anbieter", r.x + pad, r.y + r.h - pad - 20, r.w > 300 ? 18 : 14, theme::muted,
+              Weight::Bold, Align::Left, r.w - 2 * pad);
 }
 
 // ---------------------------------------------------------------------------------------
@@ -2061,26 +2146,25 @@ void App::draw_store()
 void App::draw_library()
 {
     float y = kTop + 6 - library_scroll_;
-    gfx_.text("Installierte Titel", kMargin, y, 32, theme::text, Weight::Bold);
-    const std::string where = roots_.empty() ? "" : roots_[static_cast<std::size_t>(settings_.root)].path;
-    int windows_games = 0;
-    for (const InstalledTitle &t : installed_)
-        windows_games += t.windows;
-    gfx_.text(std::to_string(installed_.size() - windows_games) + " Titel in den ShadowMountPlus-Ordnern" +
-                  (windows_games ? " · " + std::to_string(windows_games) + " Windows-Spiele in MihawkOS" : std::string()),
-              kMargin + 330, y + 10, 20, theme::muted);
+    gfx_.text("Bibliothek", kMargin, y, 32, theme::text, Weight::Bold);
+    gfx_.text(std::to_string(profiles_.size()) + " Spiele in Akeno · " + std::to_string(installed_.size()) +
+                  " PS5-Titel in den ShadowMountPlus-Ordnern",
+              kMargin + 200, y + 10, 20, theme::muted);
     y += 64;
-    const int titles = static_cast<int>(installed_.size());
+    const int games = static_cast<int>(profiles_.size());
+    const int titles = games + static_cast<int>(installed_.size());
     if (titles == 0)
     {
         gfx_.rounded({kMargin, y, kWidth - 2 * kMargin, 120}, 22, theme::panel);
-        gfx_.text("Noch keine Titel gefunden. Installiere etwas im Store – Akeno legt Titel in " + where + " ab.",
+        gfx_.text("Noch nichts installiert. Im Store unter „In Akeno spielbar“ findest du Spiele, die direkt hier laufen.",
                   kMargin + 32, y + 46, 23, theme::dim);
         y += 150;
     }
     for (int i = 0; i < titles; ++i)
     {
-        const InstalledTitle &t = installed_[static_cast<std::size_t>(i)];
+        const bool is_game = i < games;
+        const GameProfile *p = is_game ? &profiles_[static_cast<std::size_t>(i)] : nullptr;
+        const InstalledTitle *t = is_game ? nullptr : &installed_[static_cast<std::size_t>(i - games)];
         const float x = kMargin + (i % kLibraryColumns) * (kLibraryTile + 52);
         const float ty = y + (i / kLibraryColumns) * 270.0f;
         if (ty > kHeight || ty + 270 < kTop)
@@ -2091,29 +2175,26 @@ void App::draw_library()
         const Rect r{x + (kLibraryTile - s) / 2, ty + (kLibraryTile - s) / 2, s, s};
         if (focused)
             gfx_.glow(r, 22, theme::glow.with_alpha(0.45f), 20);
-        const int index = game_index_for(t);
-        const std::string art = !t.icon_path.empty() ? t.icon_path
-                                : index >= 0        ? artwork(games_[static_cast<std::size_t>(index)])
-                                                    : "";
+        const int index = t ? game_index_for(*t) : game_index_by_id(p->source);
+        std::string art = p ? p->cover : !t->icon_path.empty() ? t->icon_path : "";
+        if (art.empty() && index >= 0)
+            art = artwork(games_[static_cast<std::size_t>(index)]);
+        const std::string name = p ? p->title : t->name;
         if (const Texture *tex = images_->get(art, static_cast<int>(kLibraryTile), static_cast<int>(kLibraryTile), 22))
             gfx_.image(*tex, r);
         else
-        {
-            gfx_.rounded(r, 22, theme::panel_hi);
-            gfx_.text(initials(t.name), r.x + r.w / 2, r.y + r.h / 2 - 28, 44, theme::text, Weight::Bold, Align::Center);
-        }
-        if (index >= 0 && update_available(games_[static_cast<std::size_t>(index)], t))
+            draw_missing_cover(name, r, 22);
+        if (p)
+            draw_badge("Akeno", r.x + 10, r.y + 10, theme::accent.with_alpha(0.95f), theme::text);
+        else if (index >= 0 && update_available(games_[static_cast<std::size_t>(index)], *t))
             draw_badge("Update", r.x + 10, r.y + 10, theme::warn, {40, 25, 0});
-        else if (t.shortcut)
+        else if (t->shortcut)
             draw_badge("Verknüpfung", r.x + 10, r.y + 10, {0, 0, 0, 170}, theme::text);
-        else if (t.windows)
-            draw_badge("Windows", r.x + 10, r.y + 10, {0, 0, 0, 170}, theme::text);
         if (focused)
             gfx_.rounded_outline(r, 22, 3, {255, 255, 255, 200});
-        gfx_.text(t.name, x + 2, ty + kLibraryTile + 14, 20, focused ? theme::text : theme::dim, Weight::Bold,
+        gfx_.text(name, x + 2, ty + kLibraryTile + 14, 20, focused ? theme::text : theme::dim, Weight::Bold,
                   Align::Left, kLibraryTile);
-        gfx_.text(t.windows ? "MihawkOS" + (t.content_version.empty() ? std::string() : " · " + t.content_version)
-                            : t.title_id + " · " + (t.content_version.empty() ? "?" : t.content_version),
+        gfx_.text(p ? runtime_name(p->runtime) : t->title_id + " · " + (t->content_version.empty() ? "?" : t->content_version),
                   x + 2, ty + kLibraryTile + 40, 16, theme::muted, Weight::Regular, Align::Left, kLibraryTile);
     }
     y += ((titles + kLibraryColumns - 1) / kLibraryColumns) * 270.0f + 20;
@@ -2142,15 +2223,14 @@ void App::draw_library()
         gfx_.text(g.name, r.x + 28, r.y + 14, 23, theme::text, Weight::Bold, Align::Left, 800);
         gfx_.text(g.detection.format + (g.detection.engine.empty() ? "" : " · " + g.detection.engine), r.x + 28,
                   r.y + 48, 18, theme::dim, Weight::Regular, Align::Left, 800);
-        const RuntimeInfo *rt = nullptr;
         std::string status;
         Color color = theme::muted;
-        if (!g.detection.family.empty() && runtime_installed(g.detection.family, &rt))
-            status = std::string("Startbereit mit ") + rt->name, color = theme::ok;
-        else if (!g.detection.family.empty())
-            status = "Runtime fehlt: " + family_label(g.detection.family), color = theme::warn;
+        if (g.detection.playable)
+            status = "Spielbar in Akeno (" + runtime_name(g.detection.runtime) + ")", color = theme::ok;
+        else if (!g.detection.runtime.empty())
+            status = "Akeno-Runtime fehlt noch: " + runtime_name(g.detection.runtime), color = theme::warn;
         else
-            status = "Keine PS5-Runtime", color = theme::bad;
+            status = "Nicht unterstützt", color = theme::bad;
         gfx_.text(status, r.x + r.w - 28, r.y + 30, 20, color, Weight::Bold, Align::Right);
     }
 }
@@ -2158,15 +2238,16 @@ void App::draw_library()
 void App::draw_runtimes()
 {
     float y = kTop + 6 - runtime_scroll_;
-    gfx_.text("Universelle Runtimes", kMargin, y, 32, theme::text, Weight::Bold);
-    gfx_.paragraph("Akeno portiert nicht jedes Spiel einzeln. Jede Runtime ist ein vorhandener PS5-Titel aus dem "
-                   "signierten Katalog; Akeno erkennt Formate, installiert die passende Runtime und startet sie.",
-                   {kMargin, y + 50, 1500, 70}, 21, theme::dim, 2);
+    gfx_.text("Akeno-Runtimes", kMargin, y, 32, theme::text, Weight::Bold);
+    gfx_.paragraph("Spiele laufen in Akeno selbst: Akeno startet sich im Spielmodus neu und die passende Runtime "
+                   "übernimmt Bild, Controller und Ton. Akeno öffnet dafür keine anderen Apps. Hier steht ehrlich, "
+                   "was eingebaut ist und was noch fehlt.",
+                   {kMargin, y + 50, 1600, 70}, 21, theme::dim, 2);
     y += 130;
-    const auto &registry = runtime_registry();
-    for (std::size_t i = 0; i < registry.size(); ++i)
+    const auto &runtimes = akeno_runtimes();
+    for (std::size_t i = 0; i < runtimes.size(); ++i)
     {
-        const RuntimeInfo &info = registry[i];
+        const RuntimeInfo &info = runtimes[i];
         const Rect r{kMargin, y + i * 104.0f, kWidth - 2 * kMargin, 92};
         if (r.y > kHeight || r.y + r.h < kTop)
             continue;
@@ -2174,20 +2255,14 @@ void App::draw_runtimes()
         if (focused)
             gfx_.glow(r, 22, theme::glow.with_alpha(0.3f), 12);
         gfx_.rounded(r, 22, focused ? theme::panel_hi : theme::panel);
-        const int index = game_index_by_title(info.title_id);
-        if (index >= 0)
-            if (const Texture *t = images_->get(artwork(games_[static_cast<std::size_t>(index)]), 64, 64, 14))
-                gfx_.image(*t, {r.x + 16, r.y + 14, 64, 64});
-        gfx_.text(info.name, r.x + 100, r.y + 14, 24, theme::text, Weight::Bold);
-        gfx_.text(family_label(info.key) + "  ·  " + info.summary, r.x + 100, r.y + 50, 18, theme::dim, Weight::Regular,
-                  Align::Left, 1150);
-        bool installed = false;
-        for (const InstalledTitle &t : installed_)
-            installed |= t.title_id == info.title_id;
-        const std::string status = installed ? "Installiert" : index >= 0 ? "Im Katalog" : "Nicht gelistet";
-        const Color color = installed ? theme::ok : index >= 0 ? theme::accent2 : theme::muted;
-        draw_badge(status, r.x + r.w - 40 - gfx_.measure(status, 17, Weight::Bold) - 22, r.y + 30, color.with_alpha(0.9f),
-                   {8, 8, 20});
+        gfx_.text(info.name, r.x + 32, r.y + 14, 24, theme::text, Weight::Bold);
+        gfx_.text(std::string(info.engines) + "  ·  " + info.detail, r.x + 32, r.y + 50, 18, theme::dim,
+                  Weight::Regular, Align::Left, 1380);
+        const bool built = info.state == RuntimeState::Integrated;
+        const std::string status = built ? "Eingebaut" : "Geplant";
+        const Color color = built ? theme::ok : theme::muted;
+        draw_badge(status, r.x + r.w - 40 - gfx_.measure(status, 17, Weight::Bold) - 22, r.y + 30,
+                   color.with_alpha(0.9f), {8, 8, 20});
     }
 }
 
@@ -2286,6 +2361,8 @@ void App::draw_settings()
             ++updates;
     entry("Alle aktualisieren", updates ? std::to_string(updates) + " verfügbar" : "Alles aktuell",
           "Neuere Katalogversionen aller von Akeno installierten Titel", updates ? theme::warn : theme::ok);
+    entry("itch.io-Konto", itch_key_.empty() ? "Nicht verbunden" : "Verbunden",
+          "Eigener API-Schlüssel für Downloads über die offizielle itch.io-API", itch_key_.empty() ? theme::dim : theme::ok);
     for (const ProviderStatus &p : providers_)
     {
         std::string value = !p.enabled ? "Aus"
@@ -2347,7 +2424,7 @@ void App::draw_detail()
     else
     {
         gfx_.rounded(cover, 32, theme::panel_hi);
-        gfx_.text(initials(g.title), cover.x + 200, cover.y + 150, 96, theme::text, Weight::Bold, Align::Center);
+        draw_missing_cover(g.title, cover, 32, !artwork(g).empty() && !images_->failed(artwork(g)));
     }
     // Header.
     const float x = 580;
@@ -2391,12 +2468,7 @@ void App::draw_detail()
     }
     if (!g.age.empty())
         facts.push_back({"Alter", g.age});
-    facts.push_back({"Runtime", g.runtime == "native"    ? "Nativer PS5-Titel"
-                                : g.runtime == "web"     ? "Web (Parallax Browser / ProsperoWeb)"
-                                : g.runtime == "windows" ? (g.access == Access::Install ? "Windows (MihawkOS)" : "Windows")
-                                : g.runtime == "java"    ? "Java"
-                                : g.runtime == "linux"   ? "Linux"
-                                                         : "PC"});
+    facts.push_back({"Runtime", runtime_label(g)});
     if (facts.size() > 6)
         facts.resize(6);
     float fx = x;
@@ -2410,17 +2482,22 @@ void App::draw_detail()
     if (const InstalledTitle *installed = installed_for(g))
     {
         const bool update = update_available(g, *installed);
-        gfx_.text(update ? "Installiert: " + installed->content_version + "  →  verfügbar: " +
-                               (installed->windows ? g.version : g.content_version)
-                  : installed->windows ? "In MihawkOS installiert: " + installed->program
-                                       : "Installiert in " + installed->folder,
+        gfx_.text(update ? "Installiert: " + installed->content_version + "  →  verfügbar: " + g.content_version
+                         : "Installiert in " + installed->folder,
                   x, y, 20, update ? theme::warn : theme::ok, Weight::Bold);
+        y += 36;
+    }
+    else if (const GameProfile *profile = profile_for(g))
+    {
+        gfx_.text("In Akenos Bibliothek · " + runtime_name(profile->runtime) + " · " + profile->folder, x, y, 20,
+                  theme::ok, Weight::Bold, Align::Left, kWidth - x - kMargin);
         y += 36;
     }
     // Compatibility, online and controller facts (master prompt sections 11, 14 and 19).
     {
         const CompatReport *report = compat_->find(g.id);
-        const Compat shown = report ? report->status : g.compat;
+        std::string shown_note;
+        const Compat shown = shown_compat(g, &shown_note);
         const std::string label = std::string(report ? "Dein Test: " : "Kompatibilität: ") + compat_label(shown);
         draw_badge(label, x, y, compat_color(shown).with_alpha(0.9f), {10, 12, 24});
         float lx = x + gfx_.measure(label, 17, Weight::Bold) + 50;
@@ -2428,7 +2505,7 @@ void App::draw_detail()
                                         aspect_label(report->gameplay) + " · Grafik " + aspect_label(report->graphics) +
                                         " · Ton " + aspect_label(report->audio) + " · Controller " +
                                         aspect_label(report->controller) + " · Online " + aspect_label(report->network)
-                                  : g.compat_note;
+                                  : shown_note;
         float note_h = 0;
         if (!note.empty())
             note_h = gfx_.paragraph(note, {lx, y + 1, kWidth - lx - kMargin, 60}, 18, theme::dim, 2);
@@ -2575,29 +2652,12 @@ std::vector<std::string> App::diagnose_lines() const
         lines.push_back(root.label + ": " + (root.writable ? "beschreibbar" : "nicht beschreibbar") +
                         (space ? " · " + format_bytes(*space) + " frei" : std::string()));
     }
-    lines.push_back("# Runtimes");
-    int found = 0;
-    for (const RuntimeInfo &info : runtime_registry())
-        for (const InstalledTitle &title : installed_)
-            if (title.title_id == info.title_id)
-            {
-                lines.push_back(std::string(info.name) + " (" + info.title_id + ") " + title.content_version + " · " +
-                                family_label(info.key));
-                ++found;
-            }
-    if (!found)
-        lines.push_back("Keine Runtime-Titel installiert");
-    const std::string drive_c = mihawk_drive_c(platform::mihawk_root());
-    int windows_games = 0, akeno_games = 0;
-    for (const InstalledTitle &title : installed_)
-        if (title.windows)
-        {
-            ++windows_games;
-            akeno_games += title.managed;
-        }
-    lines.push_back("MihawkOS-Laufwerk C: vorhanden: " + yes(fs::is_dir(drive_c)) + " (" + drive_c + ")");
-    lines.push_back("MihawkOS-Bibliothek: " + std::to_string(windows_games) + " Spiele, davon " +
-                    std::to_string(akeno_games) + " mit Akeno installiert");
+    lines.push_back("# Akeno-Runtimes");
+    for (const RuntimeInfo &info : akeno_runtimes())
+        lines.push_back(std::string(info.state == RuntimeState::Integrated ? "Eingebaut: " : "Geplant: ") + info.name +
+                        " – " + info.basis);
+    lines.push_back("Bibliothek: " + std::to_string(profiles_.size()) + " Spiele in " + library_root());
+    lines.push_back(std::string("itch.io-Konto: ") + (itch_key_.empty() ? "nicht verbunden" : "verbunden"));
     lines.push_back("# Letzter Start über den ELF-Loader");
     const auto last = fs::read_file(fs::join(platform::data_dir(), "launch/last.log"), 16 * 1024);
     if (last && !last->empty())
@@ -2619,6 +2679,13 @@ std::vector<std::string> App::diagnose_lines() const
                                                                            : "inaktiv";
         lines.push_back(p.label + ": " + state + " · " + std::to_string(p.count) + " Einträge" +
                         (p.message.empty() ? std::string() : " · " + p.message));
+    }
+    lines.push_back("# Bilder");
+    {
+        const ImageCache::Stats images = images_->stats();
+        lines.push_back(std::to_string(images.loaded) + " geladen, " + std::to_string(images.failed) +
+                        " Fehlversuche (jedes Bild wird bis zu dreimal versucht)" +
+                        (images.last_error.empty() ? std::string() : " · zuletzt: " + images.last_error));
     }
     lines.push_back("# Netzwerktest");
     {

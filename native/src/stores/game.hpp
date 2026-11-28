@@ -29,7 +29,7 @@ const char *compat_key(Compat compat);
 enum class Access
 {
     Install,  // a PS5 title folder ZIP with a known SHA-256 (or one the provider resolves)
-    Runtime,  // runs in an installed runtime title (e.g. a web game in ProsperoWeb)
+    Runtime,  // a game whose files Akeno would run itself, but whose runtime is not integrated yet
     External, // discovery only: the store needs an account or a PC; Akeno shows the store page
     Upcoming, // announced, nothing to download yet
 };
@@ -54,7 +54,7 @@ struct Game
     std::string page_url;        // the store's own page
     std::string license;
     std::string needs;           // what the user must bring (own disc image, game data ...)
-    std::string runtime;         // native, web, windows, java ...
+    std::string runtime;         // native (PS5 title), akeno (Akeno library game), or the platform of a game Akeno cannot run yet: web, windows, java, linux ...
     std::string launch_url;      // for web games
     std::vector<std::string> tags;
     std::string price;           // display text, "Kostenlos" when free
@@ -76,10 +76,11 @@ struct Game
     std::string asset_name;  // GitHub release asset to resolve (glob; '|' separates alternatives)
     bool resolved = false;
 
-    // Windows games installed into MihawkOS's library (runtime "windows", access Install).
-    std::string profile;                // MihawkOS catalog ID (/data/ps5proton/games/<profile>)
-    std::string folder_name;            // C:\Games\<folder_name>
-    std::vector<std::string> programs;  // preferred program file names, best first
+    // Games for Akeno's own library (runtime "akeno", access Install): the original files
+    // are downloaded, their engine detected and an integrated runtime plays them.
+    std::string profile;     // library id
+    std::string engine_hint; // what the store says (e.g. rpgmaker2k); the files decide
+    std::string upload_id;   // itch.io upload to download
 
     // Curated facts (Akeno catalog); empty when unknown.
     std::vector<std::string> genres;

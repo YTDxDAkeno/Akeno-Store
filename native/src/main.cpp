@@ -5,6 +5,7 @@
 
 #include "core/fs.hpp"
 #include "platform/platform.hpp"
+#include "play/play.hpp"
 #include "ui/app.hpp"
 #include "ui/gfx.hpp"
 
@@ -117,6 +118,23 @@ bool save_screenshot(SDL_Renderer *renderer, const std::string &path)
 int main(int argc, char **argv)
 {
     platform::init();
+    // Play mode: the hub restarted this title to run one game with an integrated runtime.
+    const play::Request request = play::parse_arguments(argc, argv);
+    if (!request.game.empty())
+    {
+        std::string error;
+        const int code = play::run(request.game, error);
+        if (code < 0)
+        {
+            platform::log("[play] %s", error.c_str());
+            fs::make_dirs(fs::join(platform::data_dir(), "launch"));
+            fs::write_atomic(fs::join(platform::data_dir(), "launch/play-error.txt"), request.game + "\n" + error + "\n");
+        }
+        // Back to the hub when it started the game (or the game could not start), else to the home screen.
+        if (request.from_hub || code < 0)
+            platform::restart({"--return=" + request.game});
+        platform::quit();
+    }
     std::string screenshots;
     for (int i = 1; i + 1 < argc; ++i)
         if (std::strcmp(argv[i], "--screenshots") == 0)
@@ -170,7 +188,7 @@ int main(int argc, char **argv)
         platform::log("[akeno] fonts missing in %s", assets.c_str());
         platform::quit();
     }
-    auto app = std::make_unique<ui::App>(*gfx, assets);
+    auto app = std::make_unique<ui::App>(*gfx, assets, request.returned);
     SDL_GameController *pad = open_controller();
     app->controller_connected = pad != nullptr;
 
@@ -299,6 +317,7 @@ int main(int argc, char **argv)
             running = false;
         }
     }
+    const std::string play_next = app->play_request();
     app.reset();
     gfx.reset();
     if (pad)
@@ -306,5 +325,7 @@ int main(int argc, char **argv)
     SDL_DestroyRenderer(renderer);
     SDL_DestroyWindow(window);
     SDL_Quit();
+    if (!play_next.empty())
+        platform::restart(play::play_arguments(play_next, true)); // returns only when that failed
     platform::quit();
 }

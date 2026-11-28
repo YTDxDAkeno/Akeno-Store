@@ -14,6 +14,8 @@
 #include "core/json.hpp"
 #include "core/zip.hpp"
 #include "platform/platform.hpp"
+#include "play/library.hpp"
+#include "runtime/runtimes.hpp"
 
 #include <algorithm>
 #include <cerrno>
@@ -89,7 +91,7 @@ int Installer::install(const Game &game, const std::string &root)
     entry->job.title_id = game.title_id;
     entry->job.root = root;
     entry->job.total = game.size;
-    entry->job.windows = game.runtime == "windows";
+    entry->job.library = game.runtime == "akeno";
     entry->job.profile = game.profile;
     entries_.push_back(entry);
     wake_.notify_all();
@@ -105,10 +107,23 @@ int Installer::uninstall(const InstalledTitle &title)
     entry->job.kind = JobKind::Uninstall;
     entry->job.title = title.name;
     entry->job.title_id = title.title_id;
-    entry->job.root = title.windows ? title.root : title.folder;
+    entry->job.root = title.folder;
     entry->job.game_id = title.source_game_id;
-    entry->job.windows = title.windows;
-    entry->job.profile = title.profile;
+    entries_.push_back(entry);
+    wake_.notify_all();
+    return entry->job.id;
+}
+
+int Installer::uninstall_library(const std::string &id, const std::string &title)
+{
+    auto entry = std::make_shared<Entry>();
+    entry->cancel = std::make_shared<net::Cancel>();
+    std::lock_guard lock(mutex_);
+    entry->job.id = next_id_++;
+    entry->job.kind = JobKind::Uninstall;
+    entry->job.title = title;
+    entry->job.library = true;
+    entry->job.profile = id;
     entries_.push_back(entry);
     wake_.notify_all();
     return entry->job.id;
@@ -222,28 +237,23 @@ bool Installer::do_install(Entry &entry, std::string &error)
     }
     if (!game.resolved && !resolve_(game, error))
         return false;
-    if (!is_https_url(game.artifact_url) || game.sha256.size() != 64)
+    // PS5 titles (native code) need a published SHA-256. Library games may come from a store
+    // that publishes none (itch.io): they are accepted over HTTPS with the size the store
+    // states, because an integrated runtime only interprets their data and never executes
+    // a program from the download (finish_library refuses anything else).
+    const bool unhashed_ok = entry.job.library && game.sha256.empty() && game.size > 0;
+    if (!is_https_url(game.artifact_url) || (game.sha256.size() != 64 && !unhashed_ok))
     {
         error = "Es gibt keinen geprüften Download für diesen Eintrag";
         return false;
     }
     const std::string root = entry.job.root;
-    if (entry.job.windows)
+    if (entry.job.library && !valid_library_id(game.profile))
     {
-        // Into MihawkOS's own library: its C: drive must exist (MihawkOS creates it on its first start).
-        if (!valid_mihawk_profile(game.profile) || game.folder_name.empty() || game.programs.empty())
-        {
-            error = "Der Katalogeintrag beschreibt kein Windows-Spiel für MihawkOS";
-            return false;
-        }
-        if (!fs::is_dir(mihawk_drive_c(root)))
-        {
-            error = "MihawkOS hat sein Laufwerk C: noch nicht angelegt (" + mihawk_drive_c(root) +
-                    "). Starte MihawkOS einmal und versuche es dann erneut.";
-            return false;
-        }
+        error = "Der Katalogeintrag hat keine gültige Bibliotheks-ID";
+        return false;
     }
-    else if (!fs::is_dir(root) && !fs::make_dirs(root))
+    if (!fs::is_dir(root) && !fs::make_dirs(root))
     {
         error = "Der Installationsordner " + root + " ist nicht erreichbar";
         return false;
@@ -354,7 +364,9 @@ bool Installer::do_install(Entry &entry, std::string &error)
             entry.cancel.get(), game.size ? game.size + 1024 * 1024 : 8ull * 1024 * 1024 * 1024, resume_at);
         const bool complete = response.error.empty() && (response.status == 200 || response.status == 206) &&
                               (game.size == 0 || received == game.size);
-        if (complete || write_failed || entry.cancel->requested.load() ||
+        // Retry only an interrupted transfer; a finished one with the wrong size will not improve.
+        const bool finished = response.error.empty() && (response.status == 200 || response.status == 206);
+        if (complete || finished || write_failed || entry.cancel->requested.load() ||
             (response.error.empty() && response.status >= 400 && response.status < 500 && response.status != 408 &&
              response.status != 429))
             break;
@@ -379,13 +391,13 @@ bool Installer::do_install(Entry &entry, std::string &error)
     }
     update(id, [](Job &job) { job.state = JobState::Verifying; });
     const std::string digest = hash->hex();
-    if (!digest_equal(digest, game.sha256))
+    if (!unhashed_ok && !digest_equal(digest, game.sha256))
     {
         error = "SHA-256 stimmt nicht: Der Download entspricht nicht dem Katalog. Nichts wurde installiert.";
         return false;
     }
-    if (entry.job.windows)
-        return finish_windows(entry, archive, job_dir, digest, error);
+    if (entry.job.library)
+        return finish_library(entry, archive, job_dir, digest, error);
     std::string zip_error;
     const auto folder = zip::find_title_folder(archive, zip_error);
     if (!folder)
@@ -463,8 +475,8 @@ bool Installer::do_install(Entry &entry, std::string &error)
 bool Installer::do_uninstall(Entry &entry, std::string &error)
 {
     update(entry.job.id, [](Job &job) { job.state = JobState::Finishing; });
-    if (entry.job.windows)
-        return uninstall_windows(entry, error);
+    if (entry.job.library)
+        return remove_profile(entry.job.profile, false, error);
     const std::string folder = entry.job.root;
     const std::string root = fs::parent(folder);
     if (title_running(entry.job.title_id))
@@ -490,125 +502,13 @@ bool Installer::do_uninstall(Entry &entry, std::string &error)
 }
 
 // ---------------------------------------------------------------------------------------
-// Windows games in MihawkOS's library
+// Games for Akeno's own library
 
-namespace
-{
-
-// 0x8664 (x86-64), 0x14c (x86, also .NET "Any CPU") or 0 when the file is no PE program.
-unsigned pe_machine(const std::string &path)
-{
-    const int file = ::open(path.c_str(), O_RDONLY);
-    if (file < 0)
-        return 0;
-    unsigned char header[1024] = {};
-    const ssize_t got = ::read(file, header, sizeof header);
-    ::close(file);
-    if (got < 0x40 || header[0] != 'M' || header[1] != 'Z')
-        return 0;
-    const std::uint32_t pe = header[0x3c] | header[0x3d] << 8 | header[0x3e] << 16 | static_cast<std::uint32_t>(header[0x3f]) << 24;
-    if (pe + 6 > static_cast<std::uint32_t>(got) || header[pe] != 'P' || header[pe + 1] != 'E' || header[pe + 2] ||
-        header[pe + 3])
-        return 0;
-    const unsigned machine = header[pe + 4] | header[pe + 5] << 8;
-    return machine == 0x8664 || machine == 0x14c ? machine : 0;
-}
-
-bool helper_program(const std::string &name)
-{
-    // Uninstallers, crash handlers, setup and redistributable installers are never the game.
-    const std::string n = lower(name);
-    return starts_with(n, "unins") || starts_with(n, "unitycrashhandler") || n.find("setup") != std::string::npos ||
-           n.find("redist") != std::string::npos || starts_with(n, "vc_") || starts_with(n, "dxsetup") ||
-           n.find("crashpad") != std::string::npos || n.find("crashreport") != std::string::npos;
-}
-
-void collect_programs(const std::string &folder, const std::string &relative, int depth,
-                      std::vector<std::string> &out)
-{
-    if (depth > 3 || out.size() > 200)
-        return;
-    for (const fs::Entry &entry : fs::list(folder))
-    {
-        const std::string path = fs::join(folder, entry.name);
-        const std::string rel = relative.empty() ? entry.name : relative + "/" + entry.name;
-        if (entry.directory)
-            collect_programs(path, rel, depth + 1, out);
-        else if (ends_with(lower(entry.name), ".exe") && !helper_program(entry.name) && pe_machine(path))
-            out.push_back(rel);
-    }
-}
-
-std::string windows_path(const std::string &folder_name, const std::string &relative)
-{
-    std::string path = "C:\\Games\\" + folder_name;
-    if (!relative.empty())
-        path += "\\" + relative;
-    for (char &c : path)
-        if (c == '/')
-            c = '\\';
-    return path;
-}
-
-std::size_t depth(const std::string &relative)
-{
-    std::size_t n = 0;
-    for (char c : relative)
-        n += c == '/';
-    return n;
-}
-
-} // namespace
-
-bool Installer::find_windows_program(const std::string &folder, const std::vector<std::string> &preferred,
-                                     std::string &relative, std::string &error)
-{
-    std::vector<std::string> programs;
-    collect_programs(folder, "", 0, programs);
-    std::sort(programs.begin(), programs.end(), [](const std::string &a, const std::string &b) {
-        return depth(a) != depth(b) ? depth(a) < depth(b) : a < b;
-    });
-    for (const std::string &wanted : preferred)
-        for (const std::string &program : programs)
-            if (lower(fs::leaf(program)) == lower(wanted))
-            {
-                relative = program;
-                return true;
-            }
-    if (programs.size() == 1)
-    {
-        relative = programs.front();
-        return true;
-    }
-    std::string found;
-    for (std::size_t i = 0; i < programs.size() && i < 5; ++i)
-        found += (i ? ", " : "") + fs::leaf(programs[i]);
-    error = programs.empty() ? "Das Archiv enthält kein Windows-Programm für x86 oder x86-64"
-                             : "Das Archiv enthält kein eindeutiges Startprogramm (gefunden: " + found + ")";
-    return false;
-}
-
-std::string Installer::mihawk_game_json(const Game &game, const std::string &relative_program, const std::string &sha256)
-{
-    const std::string program = windows_path(game.folder_name, relative_program);
-    const std::size_t slash = relative_program.rfind('/');
-    const std::string directory =
-        windows_path(game.folder_name, slash == std::string::npos ? std::string() : relative_program.substr(0, slash));
-    const std::string version = game.content_version.empty() ? game.version : game.content_version;
-    return "{\n  \"name\": " + json::quote(game.title) + ",\n  \"detail\": " +
-           json::quote("Installiert mit Akeno Gaming Hub" + (version.empty() ? std::string() : " · " + version)) +
-           ",\n  \"executable\": " + json::quote(program) + ",\n  \"directory\": " + json::quote(directory) +
-           ",\n  \"akeno\": {\"schema\": 1, \"game\": " + json::quote(game.id) + ", \"version\": " +
-           json::quote(version) + ", \"sha256\": " + json::quote(sha256) + ", \"folder\": " +
-           json::quote(game.folder_name) + ", \"installed\": " + std::to_string(platform::unix_time()) + "}\n}\n";
-}
-
-bool Installer::finish_windows(Entry &entry, const std::string &archive, const std::string &job_dir,
+bool Installer::finish_library(Entry &entry, const std::string &archive, const std::string &job_dir,
                                const std::string &digest, std::string &error)
 {
     const int id = entry.job.id;
     const Game &game = entry.game;
-    const std::string root = entry.job.root;
     std::string zip_error;
     const auto contents = zip::inspect(archive, zip_error);
     if (!contents)
@@ -633,116 +533,73 @@ bool Installer::finish_windows(Entry &entry, const std::string &archive, const s
                       error))
         return false;
     fs::remove_tree(archive);
-    std::string program;
-    if (!find_windows_program(unpacked, game.programs, program, error))
-        return false;
 
-    update(id, [](Job &job) { job.state = JobState::Finishing; });
-    if (title_running("PPSA99170"))
+    // Engine, architecture and runtime come from the files themselves, not from the store.
+    update(id, [](Job &job) {
+        job.state = JobState::Finishing;
+        job.note = "Engine wird erkannt";
+    });
+    const Detection detection = detect_game(unpacked);
+    if (detection.engine.empty())
     {
-        error = "MihawkOS läuft gerade. Schließe es und versuche es erneut.";
+        error = "Im Download wurde kein bekanntes Spielformat gefunden. Nichts wurde installiert.";
         return false;
     }
-    const std::string games_dir = fs::join(mihawk_drive_c(root), "Games");
-    if (!fs::is_dir(games_dir) && !fs::make_dirs(games_dir))
+    if (!detection.playable)
     {
-        error = "C:\\Games kann in MihawkOS nicht angelegt werden";
+        error = "Erkannt: " + detection.engine_name + " (" + detection.format + "). " + detection.advice +
+                ". Nichts wurde installiert.";
         return false;
     }
-    const std::string destination = fs::join(games_dir, game.folder_name);
-    const std::string entry_dir = fs::join(fs::join(root, "games"), game.profile);
-    // Replace only what Akeno installed itself: the library entry must name this folder.
-    if (fs::exists(destination))
+    const std::string folder_rel =
+        detection.root.size() > unpacked.size() ? detection.root.substr(unpacked.size() + 1) : std::string();
+    const std::string dir = library_dir(game.profile);
+    const std::string destination = fs::join(dir, "game");
+    const std::string previous = fs::join(dir, "game.previous");
+    fs::make_dirs(dir);
+    fs::remove_tree(previous);
+    const bool replaced = fs::exists(destination);
+    if (replaced && !fs::rename(destination, previous))
     {
-        bool ours = false;
-        if (const auto text = fs::read_file(fs::join(entry_dir, "game.json"), 256 * 1024))
-        {
-            const json::Document doc = json::Document::parse(*text);
-            ours = doc.root()["akeno"].str("folder") == game.folder_name;
-        }
-        if (!ours)
-        {
-            error = "C:\\Games\\" + game.folder_name + " gibt es schon und stammt nicht von Akeno. Nichts wurde verändert.";
-            return false;
-        }
-    }
-    const std::string work = work_dir_for(root);
-    const std::string previous_dir = fs::join(work, "previous");
-    const std::string previous = fs::join(previous_dir, "windows-" + game.profile);
-    bool replaced = false;
-    if (fs::exists(destination))
-    {
-        fs::make_dirs(previous_dir);
-        fs::remove_tree(previous);
-        if (!fs::rename(destination, previous))
-        {
-            error = "Die vorhandene Version kann nicht beiseitegelegt werden";
-            return false;
-        }
-        replaced = true;
+        error = "Die vorhandene Version kann nicht beiseitegelegt werden";
+        return false;
     }
     if (!fs::rename(unpacked, destination))
     {
         if (replaced)
             fs::rename(previous, destination);
-        error = "Der Spielordner kann nicht nach C:\\Games verschoben werden";
+        error = "Der Spielordner kann nicht in die Bibliothek verschoben werden";
         return false;
     }
-    fs::chmod_tree(destination, 0777); // MihawkOS runs as another user and must read it
-    if (!fs::make_dirs(entry_dir) || !fs::write_atomic(fs::join(entry_dir, "game.json"), mihawk_game_json(game, program, digest)))
+    GameProfile profile;
+    if (const auto existing = read_profile(game.profile))
+        profile = *existing; // keeps last_played and the saves folder
+    profile.id = game.profile;
+    profile.title = game.title;
+    profile.developer = game.developer;
+    profile.engine = detection.engine;
+    profile.runtime = detection.runtime;
+    profile.folder = folder_rel.empty() ? destination : fs::join(destination, folder_rel);
+    profile.saves = fs::join(dir, "saves");
+    profile.source = game.id;
+    profile.version = game.content_version.empty() ? game.version : game.content_version;
+    profile.cover = !game.cover_url.empty() ? game.cover_url : game.icon_url;
+    profile.sha256 = digest;
+    profile.owned_files = true;
+    profile.installed = platform::unix_time();
+    fs::make_dirs(profile.saves);
+    if (!write_profile(profile))
     {
         fs::remove_tree(destination);
         if (replaced)
             fs::rename(previous, destination);
-        error = "Der Eintrag in der MihawkOS-Bibliothek kann nicht geschrieben werden";
+        error = "Das Startprofil kann nicht geschrieben werden";
         return false;
     }
-    fs::chmod_tree(entry_dir, 0777);
+    fs::remove_tree(previous);
     update(id, [&](Job &job) {
-        job.note = "In MihawkOS: " + windows_path(game.folder_name, program) +
-                   (replaced ? " (vorherige Version in akeno-work/previous)" : "");
+        job.note = detection.engine_name + " · startet in Akeno (" + detection.runtime + ")";
     });
-    return true;
-}
-
-bool Installer::uninstall_windows(Entry &entry, std::string &error)
-{
-    const std::string root = entry.job.root;
-    if (!valid_mihawk_profile(entry.job.profile))
-    {
-        error = "Ungültiger MihawkOS-Eintrag";
-        return false;
-    }
-    if (title_running("PPSA99170"))
-    {
-        error = "MihawkOS läuft gerade. Schließe es zuerst.";
-        return false;
-    }
-    const std::string entry_dir = fs::join(fs::join(root, "games"), entry.job.profile);
-    const auto text = fs::read_file(fs::join(entry_dir, "game.json"), 256 * 1024);
-    const json::Document doc = text ? json::Document::parse(*text) : json::Document();
-    const std::string folder = doc.root()["akeno"].str("folder");
-    if (folder.empty() || folder.find('/') != std::string::npos || folder.find('\\') != std::string::npos ||
-        folder == "." || folder == "..")
-    {
-        error = "Dieses Spiel wurde nicht mit Akeno installiert; entferne es in MihawkOS";
-        return false;
-    }
-    const std::string destination = fs::join(fs::join(mihawk_drive_c(root), "Games"), folder);
-    const std::string work = work_dir_for(root);
-    fs::make_dirs(work);
-    if (fs::exists(destination))
-    {
-        const std::string trash = fs::join(work, "trash-" + std::to_string(entry.job.id));
-        if (!fs::rename(destination, trash))
-        {
-            error = "Der Spielordner kann nicht entfernt werden (Schreibzugriff?)";
-            return false;
-        }
-        fs::remove_tree(trash);
-    }
-    fs::remove_tree(entry_dir);
-    update(entry.job.id, [](Job &job) { job.note = "Spielstände unter C:\\users in MihawkOS bleiben erhalten"; });
     return true;
 }
 

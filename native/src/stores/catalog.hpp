@@ -44,6 +44,8 @@ class Catalog
     std::vector<Game> games() const;
     std::vector<ProviderStatus> status() const;
     void set_enabled(const std::string &provider, bool enabled);
+    // The player's itch.io API key (empty to disconnect); used when an itch.io game is resolved.
+    void set_itch_key(const std::string &key);
 
     // Completes download data through the entry's provider (thread-safe).
     bool resolve(Game &game, std::string &error);

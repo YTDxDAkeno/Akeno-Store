@@ -6,7 +6,7 @@ Alle Endpunkte wurden am 27. November 2026 live abgefragt (`make -C native probe
 | --- | --- | --- | --- | --- |
 | ProsperoStore | `https://prosperostore.net/api/v1/` (`manifest.json`, `manifest.sig`, `index.json`, `apps/<id>.json`) | Ed25519-Signatur (Schlüssel `da351006acb6e3c3`, `eef399ea3007720a`), Sequenz nie rückwärts, SHA-256 jeder Datei, SHA-256 jedes Downloads | Installieren, Aktualisieren, Entfernen; Detailseite lädt den geprüften App-Datensatz | 243 Einträge |
 | RecompStore | `https://www.recompstore.com/catalog.json` (`v2Apps`, `apps`, `comingSoon*`) | Katalog unsigniert, meist ohne SHA-256 → Download nur, wenn GitHub einen SHA-256-Digest für das Asset veröffentlicht (und er mit einem Katalogwert übereinstimmt) | Installieren über das neueste GitHub-Release; „Benötigt" zeigt das eigene Original | 162 Einträge |
-| itch.io | `https://itch.io/games/free/platform-web.xml`, `https://itch.io/games/free.xml` | öffentliche Feeds, Erwachsenen-Filter | Browserspiele → Web-Runtime; übrige → Store-Seite | 60–61 |
+| itch.io | Feeds `tag-rpg-maker-2003.xml`, `tag-rpg-maker-2000.xml`, `free.xml`, `platform-web.xml`; Downloads über `https://<autor>.itch.io/<spiel>/data.json` → `https://api.itch.io/games/<id>/uploads` → `/uploads/<id>/download` | öffentliche Feeds, Erwachsenen-Filter; Downloads nur mit dem eigenen API-Schlüssel, der nur an `api.itch.io` geht; itch.io nennt keinen SHA-256, geprüft wird die Größe | RPG Maker 2000/2003 → installieren und in Akeno spielen; übrige → Entdecken | 132 |
 | Game Jolt | `https://gamejolt.com/site-api/web/discover/games?section=hot` | öffentlich, `has_adult_content` gefiltert | Browserspiele → Web-Runtime; übrige → Store-Seite | 36 |
 | GOG | `https://catalog.gog.com/v1/catalog?price=between:0,0…` | öffentlich | Entdecken kostenloser Spiele, Windows-Runtime-Hinweis | 48 |
 | Epic Games | `https://store-site-backend-static.ak.epicgames.com/freeGamesPromotions` | öffentlich | Aktuelle Gratis-Aktionen (Prozentsatz 0, laufender Zeitraum) | 2 |
@@ -21,8 +21,8 @@ Alle Endpunkte wurden am 27. November 2026 live abgefragt (`make -C native probe
   OAuth-Clients voraus; Akeno zeigt dort nur, was öffentlich ist, und verlinkt die Store-Seite (QR).
   Gekaufte Windows-Spiele können nach dem Download am PC als eigene Dateien in `/data/akeno/games`
   gelegt und über die Windows-Runtime gestartet werden.
-- **itch.io-Downloads** für PC brauchen die itch.io-API mit Schlüssel des Nutzers; das ist noch nicht
-  eingebaut. Browserspiele funktionieren ohne Konto.
+- **itch.io-Downloads** laufen ausschließlich über die offizielle itch.io-API mit dem Schlüssel des
+  Nutzers; Akeno ahmt keinen Browser-Download nach und liest keine Seiten aus.
 - **Kein Umgehen von Kaufprüfungen oder Serverautorisierungen.**
 
 ## Akeno-Katalog (`native/assets/catalog/akeno.json`)
@@ -32,9 +32,9 @@ Schema 1. Jeder Eintrag hat `id` (Kleinbuchstaben, Ziffern, `-`), `title`, `rout
 | `route` | Pflichtfelder | Was Akeno anbietet |
 | --- | --- | --- |
 | `ps5` | `title_id` | ergänzt den signierten ProsperoStore-Eintrag derselben Title-ID (Installation dort) |
-| `web` | `url` (HTTPS) | Start im Browser (Parallax Browser mit Startadresse, sonst ProsperoWeb + QR) |
-| `windows` | `repo`, `asset` (Glob, Alternativen mit `|`), `folder`, `programs` | Installation in MihawkOS `C:\Games\<folder>`, Start mit `profile=akeno-<id>` |
-| `external` | `platform`, `compat.note` | nur Information mit Begründung |
+| `web` | `url` (HTTPS) | Online-Browserspiel; wartet auf Akenos HTML5-Runtime |
+| `library` | `download` (HTTPS), `sha256` oder `size`, `engine` | originale Spieldateien: Akeno lädt sie, erkennt die Engine und spielt sie mit einer eingebauten Runtime |
+| `external` | `platform`, `compat.note` | nur Information mit Begründung (welche Akeno-Runtime fehlt) |
 
 Optionale Felder: `developer`, `description`, `genres`, `tags` (`online`, `mmo`, `multiplayer`,
 `singleplayer`, `fan`, `indie`, `open-source`, `pokemon` …), `license`, `needs`, `online`,

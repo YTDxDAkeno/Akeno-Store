@@ -9,6 +9,8 @@
 #include "install/installer.hpp"
 #include "install/library.hpp"
 #include "net/http.hpp"
+#include "play/library.hpp"
+#include "play/play.hpp"
 #include "platform/platform.hpp"
 #include "runtime/launch.hpp"
 #include "runtime/runtimes.hpp"
@@ -442,30 +444,42 @@ static void test_runtime_detection()
         fs::write_atomic(fs::join(dir, name), data);
         return fs::join(dir, name);
     };
-    CHECK(detect_game(write("game.nes", std::string("NES\x1a", 4) + std::string(100, 0))).family == "retro");
-    CHECK(detect_game(write("mario.z64", std::string("\x80\x37\x12\x40", 4) + std::string(100, 0))).family == "n64");
+    const Detection nes = detect_game(write("game.nes", std::string("NES\x1a", 4) + std::string(100, 0)));
+    CHECK(nes.engine == "rom" && nes.runtime == "retro" && !nes.playable && !nes.advice.empty());
+    CHECK(detect_game(write("mario.z64", std::string("\x80\x37\x12\x40", 4) + std::string(100, 0))).format ==
+          "Nintendo 64 ROM");
     std::string gc(0x40, '\0');
     gc[0x1C] = '\xC2';
     gc[0x1D] = '\x33';
     gc[0x1E] = '\x9F';
     gc[0x1F] = '\x3D';
-    CHECK(detect_game(write("game.iso", gc)).family == "gamecube");
+    CHECK(detect_game(write("game.iso", gc)).format == "GameCube-Disc-Image");
     std::string pe(0x100, '\0');
     pe[0] = 'M';
     pe[1] = 'Z';
     pe[0x3C] = 0x80;
     pe.replace(0x80, 6, std::string("PE\0\0\x64\x86", 6));
     const Detection windows = detect_game(write("Game.exe", pe));
-    CHECK(windows.family == "windows" && windows.format.find("x86-64") != std::string::npos);
-    CHECK(detect_game(write("movie.swf", "FWS\x0a")).family == "flash");
+    CHECK(windows.engine == "windows-x64" && windows.runtime == "windows" && !windows.playable &&
+          windows.format.find("x86-64") != std::string::npos);
+    CHECK(detect_game(write("movie.swf", "FWS\x0a")).engine == "flash");
     const Detection pck = detect_game(write("game.pck", "GDPC\x02\0\0\0"));
-    CHECK(pck.family.empty() && pck.engine == "Godot" && !pck.advice.empty());
+    CHECK(pck.engine == "godot" && pck.runtime == "godot" && !pck.playable && !pck.advice.empty());
     fs::make_dirs(fs::join(dir, "mvgame/www/js"));
     fs::write_atomic(fs::join(dir, "mvgame/www/js/rpg_core.js"), "var RPGMAKER_NAME = 'MV';");
-    CHECK(detect_game(fs::join(dir, "mvgame")).engine == "RPG Maker MV");
-    CHECK(!runtimes_for("windows").empty() && runtimes_for("windows")[0]->title_id == std::string("PPSA99170"));
-    CHECK(runtimes_for("n64").size() >= 2);
-    CHECK(scan_local_games({dir}).size() >= 6);
+    CHECK(detect_game(fs::join(dir, "mvgame")).engine_name == "RPG Maker MV");
+    // RPG Maker 2000/2003, one folder down as in most download ZIPs: played by the integrated EasyRPG runtime.
+    fs::make_dirs(fs::join(dir, "rm2k/My Game"));
+    fs::write_atomic(fs::join(dir, "rm2k/My Game/RPG_RT.ldb"), "LcfDataBase");
+    const Detection rm = detect_game(fs::join(dir, "rm2k"));
+    CHECK(rm.engine == "rpgmaker2k" && rm.runtime == "easyrpg" && rm.root == fs::join(dir, "rm2k/My Game"));
+#ifdef AKENO_WITH_EASYRPG
+    CHECK(rm.playable && runtime_integrated("easyrpg"));
+#endif
+    CHECK(!runtime_integrated("windows") && runtime_by_id("java") && runtime_by_id("html5"));
+    for (const RuntimeInfo &info : akeno_runtimes())
+        CHECK(*info.basis && *info.detail); // every runtime names what it builds on and its state
+    CHECK(scan_local_games({dir}).size() >= 7);
     fs::remove_tree(fs::parent(dir));
 }
 
@@ -532,15 +546,14 @@ static void test_akeno_catalog()
     CHECK(parse::akeno_catalog(bundled.value_or(""), games, error, &revision));
     CHECK(revision > 0 && games.size() >= 30);
     // Every entry is routed to something real or says why it is not playable.
-    int web = 0, windows = 0, ps5 = 0, external = 0;
+    int web = 0, ps5 = 0, external = 0;
     for (const Game &g : games)
     {
         CHECK(g.provider == "akeno" && g.id.rfind("akeno:", 0) == 0 && !g.title.empty() && !g.description.empty());
         if (g.access == Access::Runtime)
             web += g.runtime == "web" && is_https_url(g.launch_url);
         else if (g.access == Access::Install)
-            windows += g.runtime == "windows" && !g.source_repo.empty() && !g.programs.empty() &&
-                       g.profile.rfind("akeno-", 0) == 0;
+            CHECK(g.runtime == "akeno" && valid_library_id(g.profile));
         else if (!g.title_id.empty())
             ps5 += is_title_id(g.title_id);
         else
@@ -552,7 +565,7 @@ static void test_akeno_catalog()
         }
         CHECK(g.compat != Compat::Verified); // nothing is verified before a console test
     }
-    CHECK(web >= 3 && windows >= 1 && ps5 >= 3 && external >= 5);
+    CHECK(web >= 3 && ps5 >= 3 && external >= 5);
 
     // Shape errors and bad entries.
     CHECK(!parse::akeno_catalog(R"({"schema":2,"games":[]})", games, error, nullptr));
@@ -562,15 +575,17 @@ static void test_akeno_catalog()
             {"id":"ok-web","route":"web","title":"W","url":"https://example.com/play"},
             {"id":"bad-web","route":"web","title":"W","url":"http://example.com/"},
             {"id":"Bad Id","route":"web","title":"W","url":"https://example.com/"},
-            {"id":"win","route":"windows","title":"Win","repo":"o/r","asset":"a-*-win64.zip|a.zip","folder":"Win Game",
-             "programs":["game.exe"],"compat":{"status":"experimental","note":"n"}},
-            {"id":"win-evil","route":"windows","title":"E","repo":"o/r","asset":"a.zip","folder":"../x","programs":["a.exe"]},
+            {"id":"rpg","route":"library","title":"RPG","download":"https://example.com/rpg.zip","size":1234,
+             "engine":"rpgmaker2k","compat":{"status":"experimental","note":"n"}},
+            {"id":"rpg-http","route":"library","title":"E","download":"http://example.com/rpg.zip","size":5},
+            {"id":"win","route":"windows","title":"Gone","repo":"o/r"},
             {"id":"ps5","route":"ps5","title":"P","title_id":"PPSA12345","tags":["Online","fan"]},
             {"id":"ok-web","route":"web","title":"dup","url":"https://example.com/"}]})",
         few, error, nullptr));
     CHECK(few.size() == 3);
-    CHECK(few.size() == 3 && few[0].launch_url == "https://example.com/play" && few[1].folder_name == "Win Game" &&
-          few[1].compat == Compat::Experimental && few[1].profile == "akeno-win" && few[2].has_tag("online"));
+    CHECK(few.size() == 3 && few[0].launch_url == "https://example.com/play" && few[0].access == Access::Runtime &&
+          few[1].access == Access::Install && few[1].runtime == "akeno" && few[1].size == 1234 &&
+          few[1].compat == Compat::Experimental && few[1].profile == "akeno-rpg" && few[2].has_tag("online"));
 
     // A curated overlay adds its facts to the signed listing with the same title ID.
     Game store;
@@ -604,7 +619,7 @@ static std::string pe_program(unsigned machine)
     std::string pe(512, '\0');
     pe[0] = 'M';
     pe[1] = 'Z';
-    pe[0x3c] = 0x80;
+    pe[0x3c] = static_cast<char>(0x80);
     pe[0x80] = 'P';
     pe[0x81] = 'E';
     pe[0x84] = static_cast<char>(machine & 0xff);
@@ -612,24 +627,22 @@ static std::string pe_program(unsigned machine)
     return pe;
 }
 
-static void test_windows_install()
+static void test_library_install()
 {
-    const std::string dir = temp_dir("mihawk");
+    const std::string dir = temp_dir("library");
     fs::make_dirs(dir);
-    const std::string root = fs::join(dir, "data/ps5proton");
-    const std::string zip_path = fs::join(dir, "game.zip");
-    const std::string zip = make_zip(zip_path, {{"TestGame-1.0/bin/testgame.exe", pe_program(0x8664)},
-                                                {"TestGame-1.0/bin/unins000.exe", pe_program(0x14c)},
-                                                {"TestGame-1.0/tools/server.exe", pe_program(0x8664)},
-                                                {"TestGame-1.0/arm/testgame.exe", pe_program(0xaa64)},
-                                                {"TestGame-1.0/data/levels.txt", "level"}});
-    zip::Limits limits;
-    std::string error;
-    const auto contents = zip::inspect(zip_path, error, limits);
-    CHECK(contents && contents->prefix == "TestGame-1.0/" && contents->files == 5);
-
+    ::setenv("AKENO_DATA_DIR", fs::join(dir, "data").c_str(), 1);
+    // An itch.io-style download: the game data in one folder, the original RPG_RT.exe beside it.
+    const std::string zip_path = fs::join(dir, "rpg.zip");
+    const std::string zip = make_zip(zip_path, {{"My RPG 1.0/RPG_RT.ldb", "LcfDataBase"},
+                                                {"My RPG 1.0/RPG_RT.lmt", "LcfMapTree"},
+                                                {"My RPG 1.0/Map0001.lmu", "LcfMapUnit"},
+                                                {"My RPG 1.0/RPG_RT.exe", pe_program(0x14c)}});
+    const std::string win_path = fs::join(dir, "win.zip");
+    const std::string win = make_zip(win_path, {{"Game/Game.exe", pe_program(0x8664)}, {"Game/data.pak", "x"}});
     auto transport = std::make_unique<FakeTransport>();
-    transport->bodies["https://github.com/o/r/releases/download/v1/game.zip"] = zip;
+    transport->bodies["https://files.example.com/rpg.zip"] = zip;
+    transport->bodies["https://files.example.com/win.zip"] = win;
     net::Client client(std::move(transport));
     Library library(fs::join(dir, "receipts"));
     Installer installer(client, library, fs::join(dir, "receipts"), [](Game &, std::string &e) {
@@ -637,71 +650,110 @@ static void test_windows_install()
         return false;
     });
     Game game;
-    game.id = "akeno:testgame";
-    game.provider = "akeno";
-    game.title = "Test Game";
+    game.id = "itch:maker.itch.io/my-rpg";
+    game.provider = "itch";
+    game.title = "My RPG";
+    game.developer = "maker";
     game.kind = "game";
-    game.runtime = "windows";
+    game.runtime = "akeno";
     game.access = Access::Install;
-    game.version = "v1.0";
-    game.profile = "akeno-testgame";
-    game.folder_name = "Test Game";
-    game.programs = {"TestGame.exe"};
-    game.artifact_url = "https://github.com/o/r/releases/download/v1/game.zip";
-    game.sha256 = sha256_hex(zip);
-    game.size = zip.size();
+    game.profile = "itch-maker-my-rpg";
+    game.artifact_url = "https://files.example.com/rpg.zip";
+    game.size = zip.size(); // itch.io publishes no SHA-256: the size is checked instead
     game.resolved = true;
-
-    // MihawkOS has not created its C: drive yet: nothing is downloaded or written.
     JobState state{};
-    CHECK(wait_for(installer, installer.install(game, root), state) && state == JobState::Failed);
-    CHECK(!fs::exists(fs::join(root, "games")));
+#ifdef AKENO_WITH_EASYRPG
+    CHECK(wait_for(installer, installer.install(game, library_root()), state) && state == JobState::Done);
+    const auto profile = read_profile("itch-maker-my-rpg");
+    CHECK(profile && profile->runtime == "easyrpg" && profile->engine == "rpgmaker2k" && profile->owned_files &&
+          profile->source == game.id && profile->sha256 == sha256_hex(zip));
+    if (profile)
+    {
+        CHECK(fs::is_file(fs::join(profile->folder, "RPG_RT.ldb")) && fs::is_dir(profile->saves));
+        CHECK(profile->folder == fs::join(library_dir("itch-maker-my-rpg"), "game"));
+    }
+    CHECK(list_profiles().size() == 1);
+    // A wrong size is refused like a wrong hash.
+    Game wrong = game;
+    wrong.size = zip.size() + 7;
+    CHECK(wait_for(installer, installer.install(wrong, library_root()), state) && state == JobState::Failed);
+    CHECK(read_profile("itch-maker-my-rpg").has_value());
+    // Removing keeps the saves and drops the downloaded files.
+    fs::write_atomic(fs::join(library_dir("itch-maker-my-rpg"), "saves/Save01.lsd"), "save");
+    CHECK(wait_for(installer, installer.uninstall_library("itch-maker-my-rpg", "My RPG"), state) &&
+          state == JobState::Done);
+    CHECK(!read_profile("itch-maker-my-rpg") && !fs::exists(fs::join(library_dir("itch-maker-my-rpg"), "game")) &&
+          fs::is_file(fs::join(library_dir("itch-maker-my-rpg"), "saves/Save01.lsd")));
+#endif
+    // A Windows game: detected, but Akeno has no integrated runtime for it yet, so nothing is installed.
+    Game pc = game;
+    pc.id = "itch:maker.itch.io/pc";
+    pc.profile = "itch-maker-pc";
+    pc.artifact_url = "https://files.example.com/win.zip";
+    pc.size = win.size();
+    CHECK(wait_for(installer, installer.install(pc, library_root()), state) && state == JobState::Failed);
+    bool reason = false;
+    for (const Job &job : installer.jobs())
+        if (job.game_id == pc.id)
+            reason = job.error.find("Windows") != std::string::npos;
+    CHECK(reason && !read_profile("itch-maker-pc") && !fs::exists(fs::join(library_dir("itch-maker-pc"), "game")));
+    // A PS5 title still needs a published SHA-256.
+    Game title;
+    title.id = "github:o/r";
+    title.access = Access::Install;
+    title.runtime = "native";
+    title.artifact_url = "https://files.example.com/rpg.zip";
+    title.size = zip.size();
+    title.resolved = true;
+    CHECK(wait_for(installer, installer.install(title, fs::join(dir, "homebrew")), state) && state == JobState::Failed);
 
-    fs::make_dirs(mihawk_drive_c(root));
-    CHECK(wait_for(installer, installer.install(game, root), state) && state == JobState::Done);
-    const std::string folder = fs::join(mihawk_drive_c(root), "Games/Test Game");
-    CHECK(fs::is_file(fs::join(folder, "bin/testgame.exe")) && fs::is_file(fs::join(folder, "data/levels.txt")));
-    const std::string entry = fs::read_file(fs::join(root, "games/akeno-testgame/game.json")).value_or("");
-    const json::Document doc = json::Document::parse(entry);
-    CHECK(doc.root().str("executable") == "C:\\Games\\Test Game\\bin\\testgame.exe");
-    CHECK(doc.root().str("directory") == "C:\\Games\\Test Game\\bin");
-    CHECK(doc.root().str("name") == "Test Game" && doc.root()["akeno"].str("folder") == "Test Game" &&
-          doc.root()["akeno"].str("version") == "v1.0" && doc.root()["akeno"].str("sha256") == game.sha256);
-    auto games = Library::scan_mihawk(root);
-    CHECK(games.size() == 1 && games[0].windows && games[0].managed && games[0].profile == "akeno-testgame" &&
-          games[0].content_version == "v1.0" && games[0].folder == folder && games[0].source_game_id == "akeno:testgame");
-
-    // A game MihawkOS knows but Akeno did not install is listed, never replaced or removed.
-    fs::make_dirs(fs::join(root, "games/mygame"));
-    fs::write_atomic(fs::join(root, "games/mygame/game.json"), R"({"name":"Mine","executable":"C:\\Games\\Mine\\m.exe"})");
-    games = Library::scan_mihawk(root);
-    CHECK(games.size() == 2 && !games[0].managed && games[0].name == "Mine");
-    CHECK(wait_for(installer, installer.uninstall(games[0]), state) && state == JobState::Failed);
-    CHECK(fs::is_file(fs::join(root, "games/mygame/game.json")));
-    Game foreign = game;
-    foreign.id = "akeno:other";
-    foreign.profile = "akeno-other";
-    CHECK(wait_for(installer, installer.install(foreign, root), state) && state == JobState::Failed); // folder is taken
-    CHECK(fs::is_file(fs::join(folder, "bin/testgame.exe")));
-
-    // Program choice: the preferred name, else the only program, else a clear error.
-    std::string relative;
-    CHECK(Installer::find_windows_program(folder, {"missing.exe", "TESTGAME.EXE"}, relative, error) &&
-          relative == "bin/testgame.exe");
-    CHECK(!Installer::find_windows_program(folder, {}, relative, error) && error.find("server.exe") != std::string::npos);
-
-    // Uninstall removes the folder and the library entry.
-    games = Library::scan_mihawk(root);
-    const InstalledTitle *ours = nullptr;
-    for (const InstalledTitle &t : games)
-        if (t.managed)
-            ours = &t;
-    CHECK(ours != nullptr);
-    if (ours)
-        CHECK(wait_for(installer, installer.uninstall(*ours), state) && state == JobState::Done);
-    CHECK(!fs::exists(folder) && !fs::exists(fs::join(root, "games/akeno-testgame")));
-    CHECK(Library::scan_mihawk(root).size() == 1);
+    // Profiles: ids, parsing limits, play-mode arguments.
+    CHECK(valid_library_id("itch-a-b") && !valid_library_id("../x") && !valid_library_id("A") && !valid_library_id(""));
+    CHECK(make_library_id("Towelket One More Time 3!") == "towelket-one-more-time-3");
+    GameProfile bad;
+    CHECK(!parse_profile(R"({"schema":1,"id":"x","title":"T","runtime":"easyrpg","folder":"rel","saves":"/s"})", bad));
+    CHECK(!parse_profile(R"({"schema":1,"id":"x","title":"T","runtime":"easyrpg","folder":"/a/../b","saves":"/s"})", bad));
+    char arg0[] = "", arg1[] = "--play=itch-maker-my-rpg", arg2[] = "--from-hub";
+    char *argv[] = {arg0, arg1, arg2};
+    const play::Request request = play::parse_arguments(3, argv);
+    CHECK(request.game == "itch-maker-my-rpg" && request.from_hub && request.returned.empty());
+    char bad1[] = "--play=../../etc";
+    char *argv2[] = {arg0, bad1};
+    CHECK(play::parse_arguments(2, argv2).game.empty());
+    CHECK(play::play_arguments("x", true) == std::vector<std::string>({"--play=x", "--from-hub"}));
+    ::unsetenv("AKENO_DATA_DIR");
     fs::remove_tree(fs::parent(dir));
+}
+
+static void test_itch_api()
+{
+    std::string id, error;
+    CHECK(parse::itch_game_id(R"({"id":271234,"title":"My RPG","cover_image":"https://img.itch.zone/x.png"})", id, error) &&
+          id == "271234");
+    CHECK(!parse::itch_game_id(R"({"title":"none"})", id, error));
+    Game game;
+    CHECK(parse::itch_pick_upload(R"({"uploads":[
+        {"id":1,"filename":"soundtrack.zip","type":"soundtrack","size":9000000},
+        {"id":2,"filename":"MyRPG_demo.zip","type":"default","size":800,"traits":["p_windows","demo"]},
+        {"id":3,"filename":"MyRPG.zip","type":"default","size":700,"traits":["p_windows"]},
+        {"id":4,"filename":"MyRPG-mac.dmg","type":"default","size":900,"traits":["p_osx"]}]})", game, error));
+    CHECK(game.upload_id == "3" && game.size == 700 && game.asset_name == "MyRPG.zip");
+    Game legacy;
+    CHECK(parse::itch_pick_upload(R"({"uploads":[{"id":9,"filename":"g.zip","size":5,"p_windows":true}]})", legacy, error) &&
+          legacy.upload_id == "9");
+    Game none;
+    CHECK(!parse::itch_pick_upload(R"({"errors":["invalid key"]})", none, error) && error.find("invalid key") != std::string::npos);
+    CHECK(!parse::itch_pick_upload(R"({"uploads":[{"id":5,"filename":"g.rar","size":5}]})", none, error));
+    // RPG Maker feeds make installable library games; the general feed stays discovery only.
+    const std::string rss =
+        "<rss><channel><item><title>Old Tale [Free] [Windows]</title><plainTitle>Old Tale</plainTitle>"
+        "<link>https://maker.itch.io/old-tale</link><platforms><windows>yes</windows></platforms></item>"
+        "</channel></rss>";
+    std::vector<Game> rpg, plain;
+    CHECK(parse::itch_feed(rss, false, rpg, error, "rpgmaker2k") && rpg.size() == 1);
+    CHECK(rpg.size() == 1 && rpg[0].access == Access::Install && rpg[0].runtime == "akeno" &&
+          rpg[0].profile == "itch-maker-old-tale" && valid_library_id(rpg[0].profile) && rpg[0].kind == "game");
+    CHECK(parse::itch_feed(rss, false, plain, error) && plain.size() == 1 && plain[0].access == Access::External);
 }
 
 static void test_compat_db()
@@ -760,7 +812,8 @@ int main()
     test_runtime_detection();
     test_shortcuts();
     test_akeno_catalog();
-    test_windows_install();
+    test_library_install();
+    test_itch_api();
     test_compat_db();
     std::printf("%d checks, %d failures\n", checks, failures);
     return failures ? 1 : 0;

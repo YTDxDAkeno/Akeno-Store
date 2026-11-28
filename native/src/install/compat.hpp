@@ -35,7 +35,7 @@ struct CompatReport
     std::string title;
     std::string provider;
     std::string game_version;
-    std::string runtime;         // "PS5-Titel", "MihawkOS", "Parallax Browser", ...
+    std::string runtime;         // "PS5-Titel", "RPG Maker 2000/2003", ...
     std::string runtime_version;
     std::string firmware;
     Compat status = Compat::Untested;

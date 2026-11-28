@@ -5,13 +5,12 @@
 // The catalog ships inside the title (assets/catalog/akeno.json) and may be replaced by a
 // newer revision from the project's repository. It holds facts, never downloads: native
 // ports point at their PS5 title ID (the signed ProsperoStore listing supplies the ZIP and
-// its SHA-256), web games at their HTTPS address, and Windows builds at a GitHub release
-// asset whose SHA-256 GitHub publishes. Everything else is listed with the reason it does
-// not run yet, so nothing in the catalog pretends to be installable.
+// its SHA-256); "library" entries name original game files that Akeno downloads, detects
+// and plays with an integrated runtime. Everything else is listed with the reason it does
+// not run yet, so nothing in the catalog pretends to be playable.
 #include "core/fs.hpp"
 #include "core/json.hpp"
 #include "core/util.hpp"
-#include "stores/github.hpp"
 #include "stores/provider.hpp"
 
 #include <algorithm>
@@ -193,6 +192,7 @@ bool akeno_catalog(std::string_view text, std::vector<Game> &out, std::string &e
         }
         else if (route == "web")
         {
+            // An online browser game: it needs Akeno's HTML5 runtime, which is not integrated yet.
             const std::string url = entry.str("url");
             if (!is_https_url(url))
                 return;
@@ -203,26 +203,19 @@ bool akeno_catalog(std::string_view text, std::vector<Game> &out, std::string &e
                 game.page_url = url;
             game.tags.push_back("browser");
         }
-        else if (route == "windows")
+        else if (route == "library")
         {
-            // A Windows build from a GitHub release, installed into MihawkOS's C:\Games.
-            game.source_repo = entry.str("repo");
-            game.asset_name = entry.str("asset");
-            game.folder_name = entry.str("folder");
+            // Original game files Akeno downloads, detects and plays with an integrated runtime.
+            game.artifact_url = entry.str("download");
+            game.sha256 = lower(entry.str("sha256"));
+            game.size = static_cast<std::uint64_t>(std::max<std::int64_t>(0, entry["size"].integer()));
             game.profile = "akeno-" + key;
-            strings(entry["programs"], game.programs, 6, 80);
-            if (game.source_repo.find('/') == std::string::npos || game.asset_name.empty() ||
-                !valid_folder(game.folder_name) || game.programs.empty())
+            game.engine_hint = entry.str("engine");
+            if (!is_https_url(game.artifact_url) || (game.sha256.size() != 64 && game.size == 0))
                 return;
-            for (const std::string &program : game.programs)
-                if (!valid_folder(program) || !ends_with(lower(program), ".exe"))
-                    return;
-            game.runtime = "windows";
+            game.runtime = "akeno";
             game.access = Access::Install;
-            if (game.page_url.empty())
-                game.page_url = "https://github.com/" + game.source_repo;
-            game.tags.push_back("pc");
-            game.tags.push_back("windows");
+            game.resolved = true;
         }
         else if (route == "external")
         {
@@ -253,8 +246,8 @@ class AkenoCatalog final : public Provider
     const char *about() const override
     {
         return "Kuratierte kostenlose, Online- und Fanspiele mit ehrlichem Kompatibilitätsstatus. Native Ports "
-               "kommen aus dem signierten ProsperoStore, Web-Spiele starten im Browser, Windows-Builds werden "
-               "nur mit von GitHub veröffentlichtem SHA-256 in MihawkOS installiert.";
+               "kommen aus dem signierten ProsperoStore; alle anderen zeigen, welche Akeno-Runtime sie brauchen "
+               "und wie weit sie ist.";
     }
 
     bool refresh(ProviderContext &context, std::vector<Game> &out, std::string &error) override
@@ -286,15 +279,6 @@ class AkenoCatalog final : public Provider
         return true;
     }
 
-    bool resolve(ProviderContext &context, Game &game, std::string &error) override
-    {
-        if (game.runtime != "windows" || game.source_repo.empty())
-        {
-            error = "This entry has no download of its own";
-            return false;
-        }
-        return resolve_github_latest(context, game.source_repo, game.asset_name, game, error);
-    }
 };
 
 } // namespace

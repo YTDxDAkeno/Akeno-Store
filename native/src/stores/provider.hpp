@@ -18,6 +18,7 @@ struct ProviderContext
     std::string cache_dir; // provider-owned files live in <cache_dir>/<provider id>/
     std::string state_dir; // small persistent state (sequence numbers)
     std::string asset_dir; // read-only files shipped in the title (the bundled Akeno catalog)
+    std::string itch_key;  // the player's itch.io API key, empty when not connected
     bool allow_adult = false;
 };
 
@@ -64,7 +65,11 @@ bool prosperostore_index(std::string_view index, std::vector<Game> &out, std::st
 bool prosperostore_app(std::string_view app, Game &game, std::string &error);
 bool recompstore_catalog(std::string_view catalog, std::vector<Game> &out, std::string &error);
 bool github_release(std::string_view release, const std::string &wanted_asset, Game &game, std::string &error);
-bool itch_feed(std::string_view rss, bool allow_adult, std::vector<Game> &out, std::string &error);
+bool itch_feed(std::string_view rss, bool allow_adult, std::vector<Game> &out, std::string &error,
+               const std::string &engine_hint = {});
+// itch.io: a game page's data.json (its numeric id) and a game's upload list.
+bool itch_game_id(std::string_view data_json, std::string &id, std::string &error);
+bool itch_pick_upload(std::string_view uploads_json, Game &game, std::string &error);
 bool gamejolt_discover(std::string_view json, bool allow_adult, std::vector<Game> &out, std::string &error);
 bool gog_catalog(std::string_view json, std::vector<Game> &out, std::string &error);
 bool akeno_catalog(std::string_view catalog, std::vector<Game> &out, std::string &error, std::int64_t *revision);

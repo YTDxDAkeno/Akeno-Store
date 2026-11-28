@@ -110,11 +110,22 @@ void Catalog::set_enabled(const std::string &provider, bool enabled)
     generation_.fetch_add(1);
 }
 
+void Catalog::set_itch_key(const std::string &key)
+{
+    std::lock_guard lock(mutex_);
+    context_.itch_key = key;
+}
+
 bool Catalog::resolve(Game &game, std::string &error)
 {
+    ProviderContext context;
+    {
+        std::lock_guard lock(mutex_);
+        context = context_;
+    }
     for (const auto &provider : providers_)
         if (game.provider == provider->id())
-            return provider->resolve(context_, game, error);
+            return provider->resolve(context, game, error);
     error = "Unknown store";
     return false;
 }

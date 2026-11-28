@@ -1,15 +1,17 @@
 // Akeno Gaming Hub - discovery providers: itch.io, Game Jolt, GOG and Epic Games.
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
-// These stores publish public listings but no console packages. Akeno shows what they
-// offer and marks each entry honestly:
-//  - browser games (itch.io HTML, Game Jolt HTML) run in the Web runtime (ProsperoWeb);
-//  - downloads for PC need the store's own account flow; Akeno links the store page.
-// Nothing here downloads or launches an executable.
+// These stores publish public listings but no console packages. Akeno marks each entry
+// honestly by what its integrated runtimes can do:
+//  - itch.io RPG Maker 2000/2003 games are installed through the official itch.io API with
+//    the player's own API key and played by the integrated EasyRPG runtime;
+//  - browser games wait for Akeno's HTML5 runtime; PC downloads for the Windows runtime.
+// Nothing here launches another application or an executable from a download.
 #include "core/json.hpp"
 #include "core/util.hpp"
 #include "stores/provider.hpp"
 
+#include <cctype>
 #include <ctime>
 #include <set>
 
@@ -58,7 +60,8 @@ void classify_title(Game &game, const std::string &raw_title)
 namespace parse
 {
 
-bool itch_feed(std::string_view rss, bool allow_adult, std::vector<Game> &out, std::string &error)
+bool itch_feed(std::string_view rss, bool allow_adult, std::vector<Game> &out, std::string &error,
+               const std::string &engine_hint)
 {
     if (rss.find("<rss") == std::string_view::npos || rss.find("<!DOCTYPE") != std::string_view::npos ||
         rss.find("<!ENTITY") != std::string_view::npos)
@@ -99,9 +102,31 @@ bool itch_feed(std::string_view rss, bool allow_adult, std::vector<Game> &out, s
         game.free = true;
         game.released = xml_text(item, "pubDate");
         game.tags = {"free", "indie"};
+        game.kind = "game";
         classify_title(game, raw_title);
         const std::string platforms = xml_text(item, "platforms");
-        if (platforms.find("<html>yes</html>") != std::string::npos)
+        const bool windows = platforms.find("<windows>yes</windows>") != std::string::npos;
+        if (!engine_hint.empty() && windows)
+        {
+            // An RPG Maker 2000/2003 game: its Windows download carries the game data the
+            // integrated runtime plays (the files decide after the download).
+            game.runtime = "akeno";
+            game.engine_hint = engine_hint;
+            game.access = Access::Install;
+            game.kind = "game";
+            std::string slug = lower(game.developer + "-" + link.substr(link.find(".itch.io/") + 9));
+            for (char &c : slug)
+                if (!std::isalnum(static_cast<unsigned char>(c)))
+                    c = '-';
+            game.profile = "itch-" + slug.substr(0, 56);
+            while (!game.profile.empty() && game.profile.back() == '-')
+                game.profile.pop_back();
+            game.tags.push_back("rpgmaker");
+            game.tags.push_back("singleplayer");
+            game.compat = Compat::Experimental;
+            game.compat_note = "RPG Maker 2000/2003 über Akenos eingebaute EasyRPG-Runtime; auf der Konsole noch nicht getestet.";
+        }
+        else if (platforms.find("<html>yes</html>") != std::string::npos)
         {
             game.runtime = "web";
             game.launch_url = link;
@@ -110,11 +135,75 @@ bool itch_feed(std::string_view rss, bool allow_adult, std::vector<Game> &out, s
         }
         else
         {
-            game.runtime = platforms.find("<windows>yes</windows>") != std::string::npos ? "windows" : "pc";
+            game.runtime = windows ? "windows" : "pc";
             game.access = Access::External;
         }
         out.push_back(std::move(game));
     }
+    return true;
+}
+
+bool itch_game_id(std::string_view data_json, std::string &id, std::string &error)
+{
+    // https://<author>.itch.io/<game>/data.json: the public description of a game page.
+    const json::Document doc = json::Document::parse(data_json, 1024 * 1024);
+    const json::Value root = doc.root();
+    const std::int64_t number = root["id"].integer(-1);
+    if (!root.is_object() || number <= 0)
+    {
+        error = doc.ok() ? "itch.io nannte keine Spiel-ID" : doc.error();
+        return false;
+    }
+    id = std::to_string(number);
+    return true;
+}
+
+bool itch_pick_upload(std::string_view uploads_json, Game &game, std::string &error)
+{
+    // api.itch.io /games/<id>/uploads. A ZIP for Windows is what RPG Maker 2000/2003 games
+    // ship (the game data with RPG_RT.exe beside it); the largest such ZIP wins.
+    const json::Document doc = json::Document::parse(uploads_json, 4 * 1024 * 1024);
+    const json::Value uploads = doc.root()["uploads"];
+    if (!uploads.is_array())
+    {
+        const std::string reason = sanitize_text(doc.root()["errors"].at(0).str(), 200);
+        error = !reason.empty() ? "itch.io: " + reason : doc.ok() ? "itch.io lieferte keine Dateiliste" : doc.error();
+        return false;
+    }
+    json::Value best;
+    std::int64_t best_size = -1;
+    int zips = 0;
+    uploads.each([&](json::Value upload) {
+        const std::string name = lower(upload.str("filename"));
+        const std::string type = upload.str("type", "default");
+        if (!ends_with(name, ".zip") || (type != "default" && type != "executable"))
+            return;
+        bool windows = upload["p_windows"].boolean(false);
+        upload["traits"].each([&](json::Value trait) { windows |= trait.str() == "p_windows"; });
+        const bool demo = upload["demo"].boolean(false) || contains_folded(name, "demo");
+        ++zips;
+        const std::int64_t size = upload["size"].integer(0);
+        const std::int64_t score = (windows ? (1ll << 40) : 0) + (demo ? 0 : (1ll << 39)) + size;
+        if (score > best_size)
+        {
+            best_size = score;
+            best = upload;
+        }
+    });
+    if (!best.valid())
+    {
+        error = zips ? "Keine passende Datei" : "Das Spiel bietet keine ZIP-Datei zum Herunterladen an";
+        return false;
+    }
+    game.upload_id = std::to_string(best["id"].integer());
+    game.asset_name = sanitize_text(best.str("filename"), 200);
+    game.size = static_cast<std::uint64_t>(std::max<std::int64_t>(0, best["size"].integer()));
+    if (game.size == 0)
+    {
+        error = "itch.io nennt keine Dateigröße; ohne sie prüft Akeno den Download nicht";
+        return false;
+    }
+    game.format = "zip";
     return true;
 }
 
@@ -226,7 +315,7 @@ bool gog_catalog(std::string_view text, std::vector<Game> &out, std::string &err
         game.runtime = windows ? "windows" : "pc";
         game.description = "GOG-Titel für " + std::string(windows ? "Windows" : "PC") +
                            ". Download und Kauf laufen über dein GOG-Konto; Windows-Spiele "
-                           "lassen sich danach mit einer Windows-Runtime (MihawkOS, PC5) starten.";
+                           "warten auf Akenos Windows-Runtime.";
         game.access = Access::External;
         if (!game.title.empty())
             out.push_back(std::move(game));
@@ -331,17 +420,24 @@ class Itch final : public Provider
     const char *label() const override { return "itch.io"; }
     const char *about() const override
     {
-        return "Kostenlose Indie-Spiele aus den öffentlichen itch.io-Feeds. Browserspiele starten in "
-               "der Web-Runtime; Downloads für PC laufen über die itch.io-Seite.";
+        return "Kostenlose Indie-Spiele aus den öffentlichen itch.io-Feeds. RPG-Maker-2000/2003-Spiele installiert "
+               "Akeno über die offizielle itch.io-API mit deinem eigenen API-Schlüssel und spielt sie selbst. "
+               "Browser- und PC-Spiele warten auf Akenos HTML5- und Windows-Runtime.";
     }
     bool refresh(ProviderContext &context, std::vector<Game> &out, std::string &error) override
     {
         bool any = false;
-        for (const char *url : {"https://itch.io/games/free/platform-web.xml", "https://itch.io/games/free.xml"})
+        const std::pair<const char *, const char *> feeds[] = {
+            {"https://itch.io/games/free/tag-rpg-maker-2003.xml", "rpgmaker2k"},
+            {"https://itch.io/games/free/tag-rpg-maker-2000.xml", "rpgmaker2k"},
+            {"https://itch.io/games/free.xml", ""},
+            {"https://itch.io/games/free/platform-web.xml", ""},
+        };
+        for (const auto &[url, hint] : feeds)
         {
             std::vector<Game> batch;
             if (fetch_and_parse(context, url, [&](const std::string &body) {
-                    return parse::itch_feed(body, context.allow_adult, batch, error);
+                    return parse::itch_feed(body, context.allow_adult, batch, error, hint);
                 }, error))
             {
                 any = true;
@@ -359,6 +455,61 @@ class Itch final : public Provider
             error.clear();
         return any;
     }
+
+    bool resolve(ProviderContext &context, Game &game, std::string &error) override
+    {
+        if (game.runtime != "akeno")
+        {
+            error = "Dieses Spiel kann Akeno noch nicht selbst ausführen";
+            return false;
+        }
+        if (context.itch_key.empty())
+        {
+            error = "Für Downloads von itch.io braucht Akeno deinen itch.io-API-Schlüssel (Einstellungen → itch.io-Konto)";
+            return false;
+        }
+        const std::vector<std::pair<std::string, std::string>> auth = {{"Authorization", "Bearer " + context.itch_key},
+                                                                       {"Accept", "application/json"}};
+        const net::Response page = context.http->get(game.page_url + "/data.json", 1024 * 1024);
+        std::string game_id;
+        if (!page.ok() || !parse::itch_game_id(page.body, game_id, error))
+        {
+            if (error.empty())
+                error = page.error.empty() ? "itch.io antwortete mit HTTP " + std::to_string(page.status) : page.error;
+            return false;
+        }
+        const net::Response uploads =
+            context.http->get("https://api.itch.io/games/" + game_id + "/uploads", 4 * 1024 * 1024, nullptr, auth);
+        if (uploads.status == 401 || uploads.status == 403)
+        {
+            error = "itch.io lehnt den API-Schlüssel ab (HTTP " + std::to_string(uploads.status) + ")";
+            return false;
+        }
+        if (!uploads.ok() || !parse::itch_pick_upload(uploads.body, game, error))
+        {
+            if (error.empty())
+                error = uploads.error.empty() ? "itch.io antwortete mit HTTP " + std::to_string(uploads.status)
+                                              : uploads.error;
+            return false;
+        }
+        // The API answers with a redirect to a short-lived signed address on itch's storage; the
+        // key never leaves api.itch.io, the download itself needs none.
+        const net::Response link =
+            context.http->once("https://api.itch.io/uploads/" + game.upload_id + "/download", auth, 64 * 1024);
+        std::string location = link.header("location");
+        if (location.empty() && link.status == 200)
+            location = json::Document::parse(link.body).root().str("url");
+        if (!link.error.empty() || !is_https_url(location))
+        {
+            error = !link.error.empty() ? link.error
+                                        : "itch.io gab keine Download-Adresse heraus (HTTP " + std::to_string(link.status) + ")";
+            return false;
+        }
+        game.artifact_url = location;
+        game.sha256.clear(); // itch.io publishes none; the size is checked and the files are only interpreted
+        game.resolved = true;
+        return true;
+    }
 };
 
 class GameJolt final : public Provider
@@ -368,7 +519,7 @@ class GameJolt final : public Provider
     const char *label() const override { return "Game Jolt"; }
     const char *about() const override
     {
-        return "Beliebte Indie-Spiele von Game Jolt. Browserspiele starten in der Web-Runtime; "
+        return "Beliebte Indie-Spiele von Game Jolt zum Entdecken. Browserspiele warten auf Akenos HTML5-Runtime; "
                "Inhalte für Erwachsene sind standardmäßig ausgeblendet.";
     }
     bool refresh(ProviderContext &context, std::vector<Game> &out, std::string &error) override

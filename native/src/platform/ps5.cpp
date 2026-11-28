@@ -105,8 +105,6 @@ std::vector<std::string> import_dirs()
     return dirs;
 }
 
-std::string mihawk_root() { return "/data/ps5proton"; }
-
 std::string firmware_version()
 {
     struct
@@ -187,6 +185,24 @@ void first_frame_shown() { sceSystemServiceHideSplashScreen(); }
     sceSystemServiceLoadExec("exit", nullptr);
     for (;;)
         sceKernelUsleep(100000);
+}
+
+void restart(const std::vector<std::string> &arguments)
+{
+    std::vector<const char *> argv;
+    for (const std::string &argument : arguments)
+        argv.push_back(argument.c_str());
+    argv.push_back(nullptr);
+    log("[akeno] restart with %zu argument(s)%s%s", arguments.size(), arguments.empty() ? "" : ": ",
+        arguments.empty() ? "" : arguments[0].c_str());
+    if (log_file)
+        std::fflush(log_file);
+    // The title's own image, then the same file through its sandbox path (Prospero Win does the same).
+    for (const char *eboot : {"/app0/eboot.bin", "/mnt/sandbox/PPSA90410_000/app0/eboot.bin"})
+    {
+        const int rc = sceSystemServiceLoadExec(eboot, argv.data());
+        log("[akeno] restart through %s failed: 0x%08x", eboot, static_cast<unsigned>(rc));
+    }
 }
 
 bool send_to_loader(const std::string &elf_path, std::string &error)

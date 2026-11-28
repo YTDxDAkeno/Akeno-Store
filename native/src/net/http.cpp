@@ -4,6 +4,7 @@
 
 #include "core/util.hpp"
 
+#include <algorithm>
 #include <cstdlib>
 
 namespace akeno::net
@@ -81,6 +82,11 @@ Response Client::follow(Request request, const Sink &sink, Cancel *cancel)
                 response.error = "A redirect has no destination";
                 return response;
             }
+            // Credentials stay with the host they were meant for.
+            if (host_of(next) != host_of(request.url))
+                request.headers.erase(std::remove_if(request.headers.begin(), request.headers.end(),
+                                                     [](const auto &h) { return lower(h.first) == "authorization"; }),
+                                      request.headers.end());
             request.url = next;
             request.etag.clear();
             continue;
@@ -89,6 +95,23 @@ Response Client::follow(Request request, const Sink &sink, Cancel *cancel)
     }
     response.error = "Too many redirects";
     return response;
+}
+
+Response Client::once(const std::string &url, const std::vector<std::pair<std::string, std::string>> &headers,
+                      std::uint64_t limit)
+{
+    Response response;
+    if (!is_https_url(url))
+    {
+        response.error = "Only HTTPS addresses are allowed";
+        return response;
+    }
+    Request request;
+    request.url = url;
+    request.limit = limit;
+    request.headers = headers;
+    request.headers.emplace_back("User-Agent", user_agent());
+    return transport_->send(request, Sink(), nullptr);
 }
 
 Response Client::get(const std::string &url, std::uint64_t limit, Cancel *cancel,

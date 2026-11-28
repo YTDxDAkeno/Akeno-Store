@@ -27,15 +27,20 @@ jobs=${BUILD_JOBS:-$(nproc 2>/dev/null || echo 4)}
 echo "==> [1/6] Toolchain (public PS5 payload SDK, ps5-native-tool, libc.prx)"
 bash "$root/tools/fetch-toolchain.sh" | sed 's/^/    /'
 bash "$root/tools/build-runtime.sh" | sed 's/^/    /'
-echo "==> [2/6] SDL 2 for the title"
+echo "==> [2/6] SDL 2 for the title, integrated runtimes"
 bash "$root/tools/build-sdl.sh" | sed 's/^/    /'
+# RPG Maker 2000/2003: EasyRPG Player 0.8.1.1 built from pinned sources into Akeno's eboot.
+zlib_dir="$root/.deps/native-app/.deps/native/zlib/zlib-1.3.2"
+bash "$src/tools/easyrpg.sh" ps5 "$root/tools/ps5-cc" "$root/tools/ps5-c++" "$prefix/include/SDL2" "$zlib_dir" |
+    sed 's/^/    /'
+runtime_libs=("$src/build/easyrpg/ps5/libakeno-easyrpg.a")
 
 echo "==> [3/6] Compiling Akeno for the PS5"
 mkdir -p "$build/obj"
 includes=(-I"$src/src" -I"$src/third_party/yyjson" -I"$src/third_party/monocypher" -I"$src/third_party/miniz"
     -I"$src/third_party/picosha2" -I"$src/third_party/stb" -I"$src/third_party/qrcodegen" -I"$prefix/include/SDL2")
 cxx_sources=($(cd "$src" && ls src/core/*.cpp src/net/*.cpp src/stores/*.cpp src/install/*.cpp src/runtime/*.cpp \
-    src/ui/*.cpp src/main.cpp src/platform/ps5.cpp src/platform/ps5_http.cpp))
+    src/play/*.cpp src/ui/*.cpp src/main.cpp src/platform/ps5.cpp src/platform/ps5_http.cpp))
 c_sources=(third_party/yyjson/yyjson.c third_party/monocypher/monocypher.c third_party/monocypher/monocypher-ed25519.c
     third_party/miniz/miniz.c third_party/miniz/miniz_tdef.c third_party/miniz/miniz_tinfl.c third_party/miniz/miniz_zip.c
     third_party/qrcodegen/qrcodegen.c)
@@ -44,7 +49,7 @@ compile() {
     local source=$1 object=$2
     if [[ $source == *.cpp ]]; then
         "$root/tools/ps5-c++" -std=c++20 -O2 -fno-exceptions -fno-rtti -ffunction-sections -fdata-sections \
-            -Wall -Wno-missing-field-initializers -DAKENO_ASSET_DIR='"/app0/assets"' "${includes[@]}" \
+            -Wall -Wno-missing-field-initializers -DAKENO_ASSET_DIR='"/app0/assets"' -DAKENO_WITH_EASYRPG=1 "${includes[@]}" \
             -c "$src/$source" -o "$object"
     else
         "$root/tools/ps5-cc" -std=gnu11 -O2 -ffunction-sections -fdata-sections -DMINIZ_NO_TIME \
@@ -64,7 +69,7 @@ done
 for pid in "${pids[@]}"; do wait "$pid"; done
 
 echo "==> [4/6] Linking and signing eboot.bin"
-"$root/tools/ps5-link" "${objects[@]}" "$prefix/lib/libSDL2.a" -o "$build/eboot.elf"
+"$root/tools/ps5-link" "${objects[@]}" "${runtime_libs[@]}" "$prefix/lib/libSDL2.a" -o "$build/eboot.elf"
 mkdir -p "$build/tile"
 "$root/tools/ps5-cc" -std=gnu11 -O2 -c "$root/tile/main.c" -o "$build/tile/main.o"
 "$root/tools/ps5-link" "$build/tile/main.o" -o "$build/tile/eboot.elf"
@@ -92,6 +97,15 @@ cp "$native/runtime/libc.prx" "$app/assets/tile/libc.prx"
 cp "$repo/LICENSE" "$app/licenses/Akeno-GPL-3.0.txt"
 cp "$src/assets/fonts/Inter-LICENSE.txt" "$app/licenses/Inter-OFL.txt"
 cp "$repo/THIRD_PARTY_LICENSES.md" "$app/licenses/THIRD_PARTY_LICENSES.md"
+# The integrated runtimes' licences travel with the binary that contains them.
+easyrpg_src="$src/build/easyrpg/src"
+cp "$easyrpg_src/player/COPYING" "$app/licenses/EasyRPG-Player-GPL-3.0.txt"
+cp "$easyrpg_src/liblcf/COPYING" "$app/licenses/liblcf-MIT.txt"
+cp "$easyrpg_src/pixman/COPYING" "$app/licenses/pixman-MIT.txt"
+cp "$easyrpg_src/libpng/LICENSE" "$app/licenses/libpng.txt"
+cp "$easyrpg_src/fmt/LICENSE" "$app/licenses/fmt-MIT.txt"
+cp "$easyrpg_src/inih/LICENSE.txt" "$app/licenses/inih-BSD-3-Clause.txt"
+cp "$zlib_dir/LICENSE" "$app/licenses/zlib.txt"
 chmod -R 0777 "$app"
 "$tool" self --inspect --file "$app/eboot.bin" | sed 's/^/    /'
 "$tool" self --inspect --file "$app/sce_module/libc.prx" | grep -E "integrity" | sed 's/^/    libc.prx /'

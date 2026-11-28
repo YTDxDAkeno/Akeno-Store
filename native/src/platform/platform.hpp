@@ -27,8 +27,6 @@ std::string cache_dir();  // artwork and catalog caches
 std::vector<InstallRoot> install_roots();
 // Where the user drops ROMs, ISOs and other own game files for import.
 std::vector<std::string> import_dirs();
-// MihawkOS's data folder (games/<id>/game.json, prefixes/mihawk/drive_c). Host: simulated.
-std::string mihawk_root();
 
 // System software version, e.g. "10.01" (host: "Linux-Host"); empty when unknown.
 std::string firmware_version();
@@ -47,6 +45,11 @@ void first_frame_shown();
 
 // Ends the title the way the console expects (PS5: LoadExec "exit", never return).
 [[noreturn]] void quit();
+
+// Replaces this process with Akeno's own title and `arguments` (PS5: sceSystemServiceLoadExec
+// of /app0/eboot.bin, as Prospero Win and MihawkOS restart into a game; host: execv).
+// Returns only when the restart failed.
+void restart(const std::vector<std::string> &arguments);
 
 // Sends a payload ELF to the console's ELF loader (127.0.0.1:9021). Host: refused.
 bool send_to_loader(const std::string &elf_path, std::string &error);

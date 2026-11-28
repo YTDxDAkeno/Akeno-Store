@@ -33,6 +33,16 @@ class ImageCache
     // Requests that were asked for this frame are kept; others become evictable.
     void next_frame() { ++frame_; }
     std::size_t pending() const;
+    // True once every attempt to load `source` failed (the store has no readable picture).
+    bool failed(const std::string &source) const;
+    // The downloaded file of an HTTPS image, or "" when it was never loaded.
+    std::string cached_file(const std::string &source) const;
+    struct Stats
+    {
+        std::size_t loaded = 0, failed = 0;
+        std::string last_error; // "<host>: <reason>"
+    };
+    Stats stats() const;
 
   private:
     struct Request
@@ -46,9 +56,11 @@ class ImageCache
         bool failed = false;
         bool queued = false;
         std::uint64_t used = 0;
+        std::uint64_t failed_at = 0; // ms; a failed picture is tried again later, three times in all
+        int attempts = 0;
     };
     void worker();
-    bool load(const Request &request, Pixels &out);
+    bool load(const Request &request, Pixels &out, std::string &reason);
 
     Gfx &gfx_;
     net::Client &http_;
@@ -60,7 +72,10 @@ class ImageCache
     std::condition_variable wake_;
     std::deque<Request> queue_;
     std::deque<std::pair<std::string, Pixels>> ready_;
-    std::vector<std::string> failed_;
+    std::vector<std::pair<std::string, std::string>> failed_; // key, reason
+    std::map<std::string, int> failed_sources_;               // source -> failed attempts (render thread)
+    std::size_t loaded_count_ = 0, failed_count_ = 0;
+    std::string last_error_;
     bool stopping_ = false;
     std::vector<std::thread> workers_;
 };
