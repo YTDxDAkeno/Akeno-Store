@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "revision": 2026112801,
+  "revision": 2026112802,
   "about": "Akeno-Katalog: kuratierte kostenlose, Online- und Fanspiele (Master-Prompt Abschnitt 9). Enthält nur Fakten und Wege. Native PS5-Ports installiert der signierte ProsperoStore; alle anderen Einträge nennen die Akeno-Runtime, die sie brauchen, und deren Stand. Kein Eintrag ist 'verifiziert', bevor er auf einer PS5 getestet wurde.",
   "games": [
     {
@@ -486,7 +486,7 @@
       "page": "https://xonotic.org/",
       "compat": {
         "status": "incompatible",
-        "note": "Windows- und Linux-Builds (OpenGL). Braucht Akenos Windows-Runtime (Wine im Akeno-Titel nach dem Aufbau von Prospero Win); sie ist noch nicht integriert."
+        "note": "DarkPlaces-Engine (C, SDL2, OpenGL), GPLv3+; Downloads auf xonotic.org. Braucht Akenos Windows- oder Linux-Runtime mit OpenGL; noch nicht integriert."
       }
     },
     {
@@ -613,7 +613,7 @@
       "page": "https://mindustrygame.github.io/",
       "compat": {
         "status": "incompatible",
-        "note": "Java-Archiv (JAR). Braucht Akenos Java-Runtime auf Basis des OpenJDK-25-Ports für die PS5; sie ist noch nicht integriert."
+        "note": "Java mit Arcs SDL-Backend (arc.backend.sdl, JNI-Natives) laut desktop/src/mindustry/desktop/DesktopLauncher.java. Braucht Akenos Java-Runtime und Arc-Natives für die PS5; beides noch nicht integriert."
       },
       "icon": "https://raw.githubusercontent.com/Anuken/Mindustry/master/core/assets/icons/icon.png"
     },
@@ -666,7 +666,7 @@
       "page": "https://veloren.net/",
       "compat": {
         "status": "incompatible",
-        "note": "Braucht Vulkan oder DirectX 12 (wgpu) und Akenos Windows- oder Linux-Runtime; beide sind noch nicht integriert."
+        "note": "Rust mit wgpu 27 und winit (voxygen/Cargo.toml), Ton über kira/cpal. Braucht Vulkan oder OpenGL über Akenos Linux- oder Windows-Runtime; noch nicht integriert."
       }
     },
     {
@@ -788,13 +788,13 @@
         "fan",
         "pokemon"
       ],
-      "description": "Fan-MMO in den Regionen der Pokémon-Spiele mit eigenem Client.",
+      "description": "Fan-MMO in den Regionen der Pokémon-Spiele mit eigenem Client und Konto.",
       "online": "Offizielle Fan-Server, Konto nötig",
-      "crossplay": "Windows, macOS, Linux, Android",
+      "crossplay": "laut Projekt mehrere Plattformen (nicht geprüft)",
       "page": "https://pokemonrevolution.net/",
       "compat": {
         "status": "incompatible",
-        "note": "Fanprojekt mit eigenem Unity-Client. Braucht Akenos Windows-Runtime (Wine im Akeno-Titel nach dem Aufbau von Prospero Win); sie ist noch nicht integriert. Akeno lädt nichts herunter."
+        "note": "Eigener PC-Client mit Konto; Engine und Bedingungen für andere Laufzeitumgebungen sind von hier aus nicht prüfbar (pokemonrevolution.net war nicht erreichbar). Kandidat für Akenos Windows-Runtime, sobald sie integriert ist. Akeno lädt nichts herunter."
       }
     },
     {
@@ -839,8 +839,9 @@
       "description": "Fanspiel, in dem sich beliebige Pokémon kombinieren lassen.",
       "compat": {
         "status": "incompatible",
-        "note": "RPG Maker XP (Pokémon Essentials). Akenos eingebaute RPG-Maker-Runtime (EasyRPG) spielt nur RPG Maker 2000/2003; XP-Spiele brauchen eine eigene Runtime (z. B. mkxp-z), die noch nicht integriert ist. Akeno lädt nichts herunter."
-      }
+        "note": "RPG Maker XP (Pokémon Essentials) auf mkxp-z: Das offizielle Repository github.com/infinitefusion/infinitefusion-e18 enthält mkxp-z mit Ruby 3.1 (x64-msvcrt-ruby310.dll, Data/Scripts/001_Technical/001_MKXP_Compatibility.rb). Braucht Akenos mkxp-z-Runtime (in Arbeit, benötigt OpenGL) oder die Windows-Runtime."
+      },
+      "page": "https://github.com/infinitefusion/infinitefusion-e18"
     },
     {
       "id": "pokemon-insurgence",
